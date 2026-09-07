@@ -11,7 +11,7 @@ import sys
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mpiexec", default="mpiexec", help="MPI launcher executable")
+    parser.add_argument("--mpirun", default="mpirun", help="MPI launcher executable")
     parser.add_argument("--timeout", type=float, default=120, help="seconds per MPI job")
     parser.add_argument("--ranks", type=int, nargs="+", default=[1, 2, 3, 4])
     args = parser.parse_args()
@@ -22,10 +22,10 @@ def main():
     env.setdefault("OMP_NUM_THREADS", "1")
     env["PYTHONPATH"] = str(root / "src") + os.pathsep + env.get("PYTHONPATH", "")
     jobs = [(2, ["tests/mpi_smoke.py"])]
-    jobs.extend((n, ["-m", "unittest", "discover", "-s", "tests", "-p", "test_mpi.py", "-v"])
+    jobs.extend((n, ["-m", "pytest", "tests/test_mpi.py", "-v"])
                 for n in args.ranks)
     for n, script in jobs:
-        command = [args.mpiexec, "-n", str(n), sys.executable, *script]
+        command = [args.mpirun, "-n", str(n), sys.executable, *script]
         print("Running:", shlex.join(command), flush=True)
         proc = subprocess.Popen(command, cwd=root, env=env, start_new_session=True)
         try:
