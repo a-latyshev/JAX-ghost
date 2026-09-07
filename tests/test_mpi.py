@@ -70,6 +70,8 @@ class ForwardTests(unittest.TestCase):
                         updated = forward(x)
                         updated.block_until_ready()
                         jax.effects_barrier()
+                        self.assertIsInstance(updated, jax.Array)
+                        self.assertEqual(updated.devices(), x.devices())
                         self.assert_collective_equal(
                             np.asarray(updated), global_ids.astype(dtype) * 2 + 10 + 100 * step
                         )
@@ -125,6 +127,8 @@ class ForwardTests(unittest.TestCase):
     def test_shape_dtype_and_close(self):
         ghost = JAXGhost.from_index_map(synthetic_map("none"), COMM)
         x = jnp.zeros((ghost.n_owned,), dtype=jnp.float32)
+        with self.assertRaisesRegex(TypeError, "JAX array"):
+            ghost.scatter_forward(np.zeros((ghost.n_owned,), dtype=np.float32))
         with self.assertRaisesRegex(ValueError, "shape"):
             ghost.scatter_forward(x[:, None])
         with self.assertRaisesRegex(TypeError, "float32 and float64"):

@@ -107,18 +107,26 @@ class JAXGhost:
         """Return ``x`` with ghosts overwritten and owned values preserved.
 
         ``x`` is a one-dimensional JAX float32/float64 array with shape
-        ``(n_owned + n_ghost,)``. All ranks must use the same dtype. This method
+        ``(n_owned + n_ghost,)``, already placed on the local JAX device.
+        No numerical values are converted to host arrays. All ranks must use
+        the same dtype. This method
         is JIT compatible; construction and close are not. Differentiation
         through the communication is outside the supported interface.
         """
         if self._closed:
             raise RuntimeError("scatterer is closed")
+        if not isinstance(x, (jax.Array, jax.core.Tracer)):
+            raise TypeError("scatter_forward expects a JAX array already on the device")
         if x.ndim != 1 or x.shape[0] != self.n_owned + self.n_ghost:
             raise ValueError(f"expected shape ({self.n_owned + self.n_ghost},), got {x.shape}")
         if x.dtype not in (jnp.dtype("float32"), jnp.dtype("float64")):
             raise TypeError("scatter_forward supports float32 and float64")
 
+        if not self.peers:
+            return x
+
         packed = x[self.send_indices]
+        received_parts = []
         for i, peer in enumerate(self.peers):
             send = packed[self.send_offsets[i] : self.send_offsets[i + 1]]
             template = jnp.empty((self.recv_counts[i],), dtype=x.dtype)
@@ -128,9 +136,15 @@ class JAXGhost:
                 send, template, source=peer, dest=peer,
                 sendtag=0, recvtag=0, comm=self._comm,
             )
-            positions = self.receive_positions[self.recv_offsets[i] : self.recv_offsets[i + 1]]
-            x = x.at[positions].set(received)
-        return x
+            if self.recv_counts[i]:
+                received_parts.append(received)
+
+        # A send-only rank must still execute the exchanges above. Its array
+        # needs no update; ordered MPI effects retain the otherwise-unused sends.
+        if not received_parts:
+            return x
+        received = jnp.concatenate(received_parts)
+        return x.at[self.receive_positions].set(received)
 
     def close(self):
         """Collectively release the communicator after all calls finish.
