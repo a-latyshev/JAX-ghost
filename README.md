@@ -5,6 +5,20 @@ DOLFINx supplies ownership metadata; JAX and mpi4jax exchange owner values into
 local ghost entries. Currently supports scalar forward updates on 1D, 2D, and 3D
 meshes, with one local JAX device per MPI rank. CPU execution is tested.
 
+## Current scope
+
+1. One JAX device per MPI process. Each MPI rank manages one local JAX device,
+   so the total number of participating devices equals the number of MPI
+   processes.
+2. Numerical data remains on JAX devices. During computation, vectors and
+   communication buffers are JAX arrays. No numerical data is synchronized with
+   DOLFINx data structures; DOLFINx is used only for initialization metadata
+   and, optionally, validation.
+3. DOLFINx defines the distributed layout. Its DoF map and IndexMap provide
+   ownership, ghost indices, and process relationships. Preserving this layout
+   makes the framework compatible with DOLFINx’s distributed indexing
+   conventions and supports future integration with its data structures.
+
 ## Installation
 
 Use an environment with DOLFINx, JAX, mpi4py, and `mpi4jax==0.9.1.post1`, built
