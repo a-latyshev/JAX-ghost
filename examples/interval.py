@@ -18,7 +18,7 @@ def main():
                         help="scalar Lagrange polynomial degree (default: 1)")
     args = parser.parse_args()
     comm = MPI.COMM_WORLD
-    domain = mesh.create_unit_interval(comm, 10)
+    domain = mesh.create_unit_interval(comm, 8)
     space = fem.functionspace(domain, ("Lagrange", args.degree))
     index_map = space.dofmap.index_map
     n = index_map.size_local
