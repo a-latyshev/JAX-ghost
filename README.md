@@ -2,7 +2,7 @@
 
 JIT-compatible ghost updates for JAX arrays in MPI-parallel FEM applications.
 DOLFINx supplies ownership metadata; JAX and mpi4jax exchange owner values into
-local ghost entries. Currently supports scalar forward updates on 1D and 2D
+local ghost entries. Currently supports scalar forward updates on 1D, 2D, and 3D
 meshes, with one local JAX device per MPI rank. CPU execution is tested.
 
 ## Installation
@@ -19,13 +19,14 @@ for tested versions, ARM builds, and macOS MPI transport settings.
 
 ## Usage
 
-Run either example:
+Run an example:
 
 ```bash
 export JAX_PLATFORMS=cpu
 export JAX_NUM_CPU_DEVICES=1
 mpirun -n 2 python examples/interval.py
 mpirun -n 4 python examples/square.py
+mpirun -n 4 python examples/cube.py
 ```
 
 In your application, create a plan from a scalar DOLFINx function space `V` and

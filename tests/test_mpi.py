@@ -114,6 +114,17 @@ class TestForward:
         assert space.dofmap.index_map_bs == 1
         self.exercise(space.dofmap.index_map, fem.Function(space, dtype=np.float64))
 
+    @pytest.mark.skipif(find_spec("dolfinx") is None, reason="DOLFINx is not installed")
+    def test_dolfinx_cube(self):
+        from dolfinx import fem, mesh
+
+        domain = mesh.create_unit_cube(
+            COMM, 4, 4, 4, cell_type=mesh.CellType.tetrahedron, dtype=np.float64
+        )
+        space = fem.functionspace(domain, ("Lagrange", 1))
+        assert space.dofmap.index_map_bs == 1
+        self.exercise(space.dofmap.index_map, fem.Function(space, dtype=np.float64))
+
     def test_invalid_block_size(self):
         with pytest.raises(ValueError, match="block_size"):
             JAXGhost.from_index_map(synthetic_map("none"), COMM, block_size=2)
