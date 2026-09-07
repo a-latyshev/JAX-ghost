@@ -6,6 +6,8 @@ values passed to either scatter stay in JAX arrays throughout the operation.
 
 from __future__ import annotations
 
+import operator
+
 import jax
 import jax.numpy as jnp
 import mpi4jax
@@ -27,7 +29,8 @@ class JAXGhost:
     All ranks in ``comm`` must construct and execute their scatterers in the
     same sequence, using the same vector dtype. Each rank may have a different
     local vector length. Use ``jax.jit(ghost.scatter_forward)`` to compile the
-    complete update. One local JAX device and scalar entries are supported.
+    complete update. One local JAX device and fixed-size blocks are supported.
+    n_owned and n_ghost count scalar entries, including all block components.
 
     The plan and its runtime communicator must outlive every compiled call.
     Call ``close`` collectively after the last use, then discard compiled
@@ -39,14 +42,21 @@ class JAXGhost:
         """Collectively derive the plan from a DOLFINx-compatible IndexMap.
 
         ``comm`` must have the same rank numbering as the index map. Pass
-        ``V.dofmap.index_map_bs`` as block_size to check that the space is scalar.
+        ``V.dofmap.index_map_bs`` as block_size (a positive integer, identical
+        on all ranks).
         Metadata requests use one-time Alltoall/Alltoallv; runtime exchanges
         involve neighbors only. The index map itself is not retained.
         """
         error = None
         try:
-            if block_size != 1:
-                raise ValueError("only block_size=1 is supported")
+            if isinstance(block_size, (bool, np.bool_)):
+                raise ValueError("block_size must be a positive integer")
+            try:
+                block_size = operator.index(block_size)
+            except TypeError:
+                raise ValueError("block_size must be a positive integer") from None
+            if block_size < 1:
+                raise ValueError("block_size must be a positive integer")
             if jax.local_device_count() != 1:
                 raise ValueError("exactly one local JAX device per MPI rank is required")
             n_owned = int(index_map.size_local)
@@ -65,6 +75,10 @@ class JAXGhost:
             error = str(exc)
         _collective_check(comm, error)
 
+        block_sizes = comm.allgather(block_size)
+        if len(set(block_sizes)) != 1:
+            raise ValueError("block_size must be identical on all ranks")
+
         # A stable grouping preserves each requester's original order within
         # an owner. Its permutation also tells us where to unpack the answer.
         permutation = np.argsort(owners, kind="stable")
@@ -82,23 +96,33 @@ class JAXGhost:
         error = None
         if np.any((incoming_ids < start) | (incoming_ids >= stop)):
             error = "a requested global ID is outside this owner's range"
-        if max(n_owned + ghosts.size, incoming_ids.size) > np.iinfo(np.int32).max:
+        if max(n_owned + ghosts.size, incoming_ids.size) * block_size > np.iinfo(np.int32).max:
             error = "local indexing exceeds the supported int32 range"
         _collective_check(comm, error)
 
         self = cls()
-        self.n_owned = n_owned
-        self.n_ghost = int(ghosts.size)
+        self.block_size = block_size
+        self.n_owned = n_owned * block_size
+        self.n_ghost = int(ghosts.size) * block_size
         self.peers = tuple(
             int(p) for p in np.flatnonzero(request_counts + incoming_counts)
         )
         # Reverse the request direction: received requests become value sends.
-        self.send_counts = tuple(int(incoming_counts[p]) for p in self.peers)
-        self.recv_counts = tuple(int(request_counts[p]) for p in self.peers)
+        self.send_counts = tuple(int(incoming_counts[p]) * block_size for p in self.peers)
+        self.recv_counts = tuple(int(request_counts[p]) * block_size for p in self.peers)
         self.send_offsets = tuple(int(v) for v in np.cumsum((0,) + self.send_counts))
         self.recv_offsets = tuple(int(v) for v in np.cumsum((0,) + self.recv_counts))
-        self.send_indices = jnp.asarray(incoming_ids - start, dtype=jnp.int32)
-        self.receive_positions = jnp.asarray(n_owned + permutation, dtype=jnp.int32)
+        # DOLFINx Scatterer expands each block i into bs*i + component.
+        # Setup requests remain block IDs; runtime buffers contain scalar entries.
+        components = np.arange(block_size, dtype=np.int64)
+        self.send_indices = jnp.asarray(
+            ((incoming_ids - start)[:, None] * block_size + components).ravel(),
+            dtype=jnp.int32,
+        )
+        self.receive_positions = jnp.asarray(
+            ((n_owned + permutation)[:, None] * block_size + components).ravel(),
+            dtype=jnp.int32,
+        )
         self._comm = comm.Dup()
         self._closed = False
         return self
