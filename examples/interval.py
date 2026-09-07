@@ -1,4 +1,4 @@
-"""Run with: JAX_PLATFORMS=cpu mpiexec -n 2 python examples/interval.py."""
+"""Run with: JAX_PLATFORMS=cpu mpirun -n 2 python examples/interval.py."""
 
 from mpi4py import MPI
 import jax
