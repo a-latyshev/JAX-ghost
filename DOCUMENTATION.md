@@ -4,6 +4,7 @@ See [README.md](README.md) for a quick introduction, installation, and usage.
 
 - [Current implementation](#first-implementation-scalar-forward-update)
 - [Data flow](#how-data-moves)
+- [Reverse ADD](#reverse-add-update)
 - [2D example](#scalar-field-on-a-2d-square)
 - [3D example](#scalar-field-on-a-3d-cube)
 - [Higher-order scalar elements](#higher-order-scalar-elements)
@@ -115,6 +116,65 @@ x = [10, 11, 12 | 13]             x = [13, 14, 15 | 12]
 Here rank 0 packs local index 2, rank 1 packs local index 0, and both unpack
 into local index 3. The DOLFINx example may produce a different partition;
 the implementation always derives these indices from its actual metadata.
+
+### Reverse ADD update
+
+`ghost.scatter_reverse(x)` adds ghost contributions into their owners and
+returns the full local array `[updated owned | unchanged ghosts]`. It preserves
+its input, dtype, shape, and JAX device placement. This matches DOLFINx's
+`reference.x.scatter_reverse(dolfinx.la.InsertMode.add)` with JAX's functional
+array semantics. ADD is the only reverse mode; no mode argument is required.
+
+```python
+reverse = jax.jit(ghost.scatter_reverse)
+x = reverse(x)
+# Only if ghost copies should now contain the accumulated owner values:
+x = forward(x)
+```
+
+The existing plan is reused in the opposite direction, following DOLFINx's
+C++ `Vector.scatter_rev_begin`/`scatter_rev_end` packing and unpacking:
+
+```mermaid
+flowchart TD
+    A["JAX local vector: owned contributions | ghost contributions"]
+    B["Gather ghost values using receive_positions"]
+    C["mpi4jax sendrecv: ghosts to owners"]
+    D["Concatenate received contributions"]
+    E["Indexed ADD at send_indices, including repeated indices"]
+    F["Return updated owned values | unchanged ghosts"]
+    A --> B --> C --> D --> E --> F
+```
+
+Forward receive counts/offsets become reverse send counts/offsets, and vice
+versa. Peers are visited in ascending rank order. Reverse uses MPI tag 1;
+forward uses tag 0 on the same runtime communicator. Every rank must execute
+operations in the same sequence. Send-only operations remain ordered effects,
+including on ranks whose returned array needs no changes.
+
+For an owner initially holding 10, ghost contributions of 2 and 3 produce 15.
+The sending ghosts remain 2 and 3. A second reverse call produces 20; reverse
+neither clears contributions nor refreshes ghosts. Assembly code must initialize
+its contribution buffers before a new assembly. A forward update can distribute
+accumulated values, but those refreshed copies are not new assembly contributions.
+
+Run the single-update demonstration with:
+
+```bash
+mpirun -n 2 python examples/reverse.py
+mpirun -n 4 python examples/reverse.py
+```
+
+Tests cover repeated eager/JIT accumulation, float32/float64, nonzero initial
+owners, rank-dependent contributions, duplicate owner destinations, irregular
+layouts, empty regions, and reverse followed by forward. P1–P3 spaces in 1D–3D
+are compared against DOLFINx; synthetic cases also use an independent global-ID
+oracle. Only validation gathers host data. General floating-point sums use
+tolerances because accumulation order can differ between implementations.
+
+Reverse ADD does not itself enable automatic differentiation of the scatterer.
+INSERT mode, block-valued fields, differentiation, and performance optimization
+remain separate work.
 
 ### Scalar field on a 2D square
 
@@ -281,6 +341,7 @@ documented in [MPICH issue 6856](https://github.com/pmodels/mpich/issues/6856).
 | --- | --- | --- |
 | `JAXGhost.from_index_map(...)` | No | Host ownership metadata and initial device indices |
 | `ghost.scatter_forward(x)` | Yes | JAX float32 or float64 arrays |
+| `ghost.scatter_reverse(x)` | Yes | JAX float32 or float64 arrays; ADD into owners |
 | Local numerical kernels | Yes | JAX arrays |
 | `ghost.close()` | No | Wait for effects and release the MPI communicator |
 
@@ -306,7 +367,7 @@ documented in [MPICH issue 6856](https://github.com/pmodels/mpich/issues/6856).
 - Treat the plan as immutable. Rebuild it if the partition or ghost layout
   changes. Concurrent updates from multiple Python threads are unsupported.
 
-Reverse scatter, differentiation through communication, sparse matvec, GPU
+Reverse INSERT, differentiation through communication, sparse matvec, GPU
 validation, and communication/computation overlap are future work. The forward
 operation alone does not establish correct distributed automatic differentiation.
 
@@ -321,7 +382,8 @@ and [installation guidance](https://mpi4jax.readthedocs.io/en/stable/installatio
 ## Project goals
 
 The following sections describe the broader project goals and target interfaces.
-Reverse scatter and distributed matvec are not implemented yet.
+Forward INSERT and reverse ADD are implemented. Distributed matvec and
+automatic differentiation remain future work; the interfaces below are schematic.
 
 Implement a reusable JAX-compatible abstraction for synchronizing **owned and ghost entries** of vectors distributed across multiple MPI processes and JAX devices.
 
