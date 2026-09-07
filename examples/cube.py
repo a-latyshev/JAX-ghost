@@ -1,7 +1,9 @@
-"""Scalar P1 forward updates on a tetrahedral unit-cube mesh.
+"""Scalar P1/P2/P3 forward updates on a tetrahedral unit-cube mesh.
 
 Run with: JAX_PLATFORMS=cpu mpirun -n 2 python examples/cube.py
 """
+
+import argparse
 
 from mpi4py import MPI
 import jax
@@ -11,14 +13,19 @@ from dolfinx import fem, mesh
 
 from jaxghost import JAXGhost
 
+jax.config.update("jax_enable_x64", True)
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--degree", type=int, choices=(1, 2, 3), default=1,
+                        help="scalar Lagrange polynomial degree (default: 1)")
+    args = parser.parse_args()
     jax.config.update("jax_enable_x64", True)
     comm = MPI.COMM_WORLD
     domain = mesh.create_unit_cube(
         comm, 4, 4, 4, cell_type=mesh.CellType.tetrahedron, dtype=np.float64
     )
-    space = fem.functionspace(domain, ("Lagrange", 1))
+    space = fem.functionspace(domain, ("Lagrange", args.degree))
     index_map = space.dofmap.index_map
     n = index_map.size_local
     owned_ids = np.arange(*index_map.local_range, dtype=np.int64)
@@ -59,7 +66,7 @@ def main():
             root=0,
         )
         if comm.rank == 0:
-            print("Cube field matches owners and DOLFINx", flush=True)
+            print(f"Cube P{args.degree} field matches owners and DOLFINx", flush=True)
             print("\n".join(summaries), flush=True)
 
 
