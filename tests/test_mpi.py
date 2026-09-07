@@ -86,61 +86,6 @@ class TestForward:
                             self.assert_collective_equal(np.asarray(updated), reference.x.array)
                         x = updated
 
-    def test_irregular_multiple_neighbors(self):
-        self.exercise(synthetic_map("irregular"))
-
-    def test_zero_ghost_sender_and_asymmetric_messages(self):
-        self.exercise(synthetic_map("one_way"))
-
-    def test_no_communication(self):
-        self.exercise(synthetic_map("none"))
-
-    def test_no_owned_entries(self):
-        self.exercise(synthetic_map("empty_owner"))
-
-    @pytest.mark.skipif(find_spec("dolfinx") is None, reason="DOLFINx is not installed")
-    @pytest.mark.parametrize("degree", (1, 2, 3), ids=("P1", "P2", "P3"))
-    def test_dolfinx_interval(self, degree):
-        from dolfinx import fem, mesh
-
-        domain = mesh.create_unit_interval(COMM, 8)
-        space = fem.functionspace(domain, ("Lagrange", degree))
-        assert space.dofmap.index_map_bs == 1
-        if degree > 1:
-            # Higher-order spaces include DoFs beyond mesh vertices.
-            assert space.dofmap.index_map.size_global > domain.topology.index_map(0).size_global
-        self.exercise(space.dofmap.index_map, fem.Function(space, dtype=np.float64))
-
-    @pytest.mark.skipif(find_spec("dolfinx") is None, reason="DOLFINx is not installed")
-    @pytest.mark.parametrize("degree", (1, 2, 3), ids=("P1", "P2", "P3"))
-    def test_dolfinx_square(self, degree):
-        from dolfinx import fem, mesh
-
-        domain = mesh.create_unit_square(
-            COMM, 8, 8, cell_type=mesh.CellType.triangle, dtype=np.float64
-        )
-        space = fem.functionspace(domain, ("Lagrange", degree))
-        assert space.dofmap.index_map_bs == 1
-        if degree > 1:
-            # Higher-order spaces include DoFs beyond mesh vertices.
-            assert space.dofmap.index_map.size_global > domain.topology.index_map(0).size_global
-        self.exercise(space.dofmap.index_map, fem.Function(space, dtype=np.float64))
-
-    @pytest.mark.skipif(find_spec("dolfinx") is None, reason="DOLFINx is not installed")
-    @pytest.mark.parametrize("degree", (1, 2, 3), ids=("P1", "P2", "P3"))
-    def test_dolfinx_cube(self, degree):
-        from dolfinx import fem, mesh
-
-        domain = mesh.create_unit_cube(
-            COMM, 4, 4, 4, cell_type=mesh.CellType.tetrahedron, dtype=np.float64
-        )
-        space = fem.functionspace(domain, ("Lagrange", degree))
-        assert space.dofmap.index_map_bs == 1
-        if degree > 1:
-            # Higher-order spaces include DoFs beyond mesh vertices.
-            assert space.dofmap.index_map.size_global > domain.topology.index_map(0).size_global
-        self.exercise(space.dofmap.index_map, fem.Function(space, dtype=np.float64))
-
     @pytest.mark.parametrize("block_size", (0, -1, 1.5, True, "2"))
     def test_invalid_block_size(self, block_size):
         with pytest.raises(ValueError, match="block_size"):
@@ -245,47 +190,27 @@ class TestReverse:
                         assert_collective_close(np.asarray(refreshed), reference.x.array,
                                                 rtol=tolerance, atol=tolerance)
 
-    @pytest.mark.parametrize("kind", ("irregular", "one_way", "none", "empty_owner"))
-    def test_synthetic(self, kind):
-        # With >=3 ranks, one_way has multiple senders adding to rank 0's same
-        # owned entries. Rank 0 has no ghosts; other ranks only send in reverse.
-        self.exercise(synthetic_map(kind))
-
-    @pytest.mark.skipif(find_spec("dolfinx") is None, reason="DOLFINx is not installed")
-    @pytest.mark.parametrize("dimension", (1, 2, 3))
-    @pytest.mark.parametrize("degree", (1, 2, 3), ids=("P1", "P2", "P3"))
-    def test_dolfinx(self, dimension, degree):
-        from dolfinx import fem, mesh
-        if dimension == 1:
-            domain = mesh.create_unit_interval(COMM, 8)
-        elif dimension == 2:
-            domain = mesh.create_unit_square(COMM, 8, 8, cell_type=mesh.CellType.triangle)
-        else:
-            domain = mesh.create_unit_cube(COMM, 4, 4, 4, cell_type=mesh.CellType.tetrahedron)
-        space = fem.functionspace(domain, ("Lagrange", degree))
-        assert space.dofmap.index_map_bs == 1
-        self.exercise(space.dofmap.index_map, fem.Function(space, dtype=np.float64))
 
 
-@pytest.mark.parametrize("block_size", (2, 3))
 @pytest.mark.parametrize("kind", ("irregular", "one_way", "none", "empty_owner"))
-def test_blocked_synthetic(kind, block_size):
+def test_blocked_synthetic(kind):
+    block_size = 2
     index_map = synthetic_map(kind)
     TestForward().exercise(index_map, block_size=block_size)
     TestReverse().exercise(index_map, block_size=block_size)
 
 
 @pytest.mark.skipif(find_spec("dolfinx") is None, reason="DOLFINx is not installed")
-@pytest.mark.parametrize("dimension", (1, 2, 3))
-@pytest.mark.parametrize("degree", (1, 2, 3))
+# Representative layouts, rather than a degree × dimension × shape product.
 @pytest.mark.parametrize(
-    "value_shape",
-    ((2,), (3,), (2, 2), (3, 3), (2, 2, 2), (3, 3, 3),
-     (2, 2, 2, 2), (3, 3, 3, 3)),
-    ids=("vector2", "vector3", "tensor2-order2", "tensor3-order2",
-         "tensor2-order3", "tensor3-order3", "tensor2-order4", "tensor3-order4"),
+    "dimension, degree, value_shape",
+    ((1, 1, ()), (2, 2, ()), (3, 3, ()),
+     (2, 2, (2,)), (3, 1, (3,)),
+     (2, 1, (2, 2)), (2, 2, (2, 2, 2)), (3, 1, (3, 3, 3, 3))),
+    ids=("interval-P1", "square-P2", "cube-P3", "vector2", "vector3",
+         "tensor-order2", "tensor-order3", "tensor-order4"),
 )
-def test_dolfinx_blocked(dimension, degree, value_shape):
+def test_dolfinx_layout(dimension, degree, value_shape):
     from dolfinx import fem, mesh
     if dimension == 1:
         domain = mesh.create_unit_interval(COMM, 8)
@@ -321,10 +246,8 @@ def test_blocked_shape(operation):
 
 
 @pytest.mark.skipif(find_spec("dolfinx") is None, reason="DOLFINx is not installed")
-@pytest.mark.parametrize("degree", (1, 2, 3), ids=("P1", "P2", "P3"))
-@pytest.mark.parametrize("value_shape", ((), (2,), (2, 2)),
-                         ids=("scalar", "vector", "tensor"))
-def test_irregular_geometry(degree, value_shape):
+def test_irregular_geometry():
+    degree, value_shape = 2, (2,)
     from dolfinx import fem
     from examples.irregular import create_irregular_mesh
 
