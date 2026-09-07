@@ -1,8 +1,8 @@
-"""Collective unittest cases; run via scripts/run_mpi_tests.py."""
+"""Collective pytest cases; run via scripts/run_mpi_tests.py."""
 
 from importlib.util import find_spec
 from types import SimpleNamespace
-import unittest
+import pytest
 
 from mpi4py import MPI
 import jax
@@ -44,7 +44,7 @@ def synthetic_map(kind):
     )
 
 
-class ForwardTests(unittest.TestCase):
+class TestForward:
     def assert_collective_equal(self, actual, expected):
         error = None
         try:
@@ -52,7 +52,7 @@ class ForwardTests(unittest.TestCase):
         except AssertionError as exc:
             error = f"rank {COMM.rank}: {exc}"
         errors = COMM.allgather(error)
-        self.assertFalse(any(errors), "\n".join(e for e in errors if e))
+        assert not any(errors), "\n".join(e for e in errors if e)
 
     def exercise(self, index_map, reference=None):
         n = index_map.size_local
@@ -70,8 +70,8 @@ class ForwardTests(unittest.TestCase):
                         updated = forward(x)
                         updated.block_until_ready()
                         jax.effects_barrier()
-                        self.assertIsInstance(updated, jax.Array)
-                        self.assertEqual(updated.devices(), x.devices())
+                        assert isinstance(updated, jax.Array)
+                        assert updated.devices() == x.devices()
                         self.assert_collective_equal(
                             np.asarray(updated), global_ids.astype(dtype) * 2 + 10 + 100 * step
                         )
@@ -94,17 +94,28 @@ class ForwardTests(unittest.TestCase):
     def test_no_owned_entries(self):
         self.exercise(synthetic_map("empty_owner"))
 
-    @unittest.skipUnless(find_spec("dolfinx"), "DOLFINx is not installed")
+    @pytest.mark.skipif(find_spec("dolfinx") is None, reason="DOLFINx is not installed")
     def test_dolfinx_interval(self):
         from dolfinx import fem, mesh
 
         domain = mesh.create_unit_interval(COMM, max(8, 4 * COMM.size))
         space = fem.functionspace(domain, ("Lagrange", 1))
-        self.assertEqual(space.dofmap.index_map_bs, 1)
+        assert space.dofmap.index_map_bs == 1
+        self.exercise(space.dofmap.index_map, fem.Function(space, dtype=np.float64))
+
+    @pytest.mark.skipif(find_spec("dolfinx") is None, reason="DOLFINx is not installed")
+    def test_dolfinx_square(self):
+        from dolfinx import fem, mesh
+
+        domain = mesh.create_unit_square(
+            COMM, 8, 8, cell_type=mesh.CellType.triangle, dtype=np.float64
+        )
+        space = fem.functionspace(domain, ("Lagrange", 1))
+        assert space.dofmap.index_map_bs == 1
         self.exercise(space.dofmap.index_map, fem.Function(space, dtype=np.float64))
 
     def test_invalid_block_size(self):
-        with self.assertRaisesRegex(ValueError, "block_size"):
+        with pytest.raises(ValueError, match="block_size"):
             JAXGhost.from_index_map(synthetic_map("none"), COMM, block_size=2)
 
     def test_invalid_metadata_is_collective(self):
@@ -112,32 +123,28 @@ class ForwardTests(unittest.TestCase):
         if COMM.rank == 0:
             index_map.ghosts = np.array([0], dtype=np.int64)
             index_map.owners = np.array([COMM.size], dtype=np.int32)
-        with self.assertRaisesRegex(ValueError, "ghost owners"):
+        with pytest.raises(ValueError, match="ghost owners"):
             JAXGhost.from_index_map(index_map, COMM)
 
-    @unittest.skipIf(COMM.size == 1, "requires a remote owner")
+    @pytest.mark.skipif(COMM.size == 1, reason="requires a remote owner")
     def test_requested_id_outside_owner_range(self):
         index_map = synthetic_map("none")
         if COMM.rank == 0:
             index_map.ghosts = np.array([999999], dtype=np.int64)
             index_map.owners = np.array([1], dtype=np.int32)
-        with self.assertRaisesRegex(ValueError, "outside"):
+        with pytest.raises(ValueError, match="outside"):
             JAXGhost.from_index_map(index_map, COMM)
 
     def test_shape_dtype_and_close(self):
         ghost = JAXGhost.from_index_map(synthetic_map("none"), COMM)
         x = jnp.zeros((ghost.n_owned,), dtype=jnp.float32)
-        with self.assertRaisesRegex(TypeError, "JAX array"):
+        with pytest.raises(TypeError, match="JAX array"):
             ghost.scatter_forward(np.zeros((ghost.n_owned,), dtype=np.float32))
-        with self.assertRaisesRegex(ValueError, "shape"):
+        with pytest.raises(ValueError, match="shape"):
             ghost.scatter_forward(x[:, None])
-        with self.assertRaisesRegex(TypeError, "float32 and float64"):
+        with pytest.raises(TypeError, match="float32 and float64"):
             ghost.scatter_forward(x.astype(jnp.int32))
         ghost.close()
         ghost.close()
-        with self.assertRaisesRegex(RuntimeError, "closed"):
+        with pytest.raises(RuntimeError, match="closed"):
             ghost.scatter_forward(x)
-
-
-if __name__ == "__main__":
-    unittest.main()

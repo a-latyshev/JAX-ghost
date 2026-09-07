@@ -23,5 +23,8 @@ A scalar field on a 2D mesh still has a flat `[owned | ghosts]` vector; derive
 communication from IndexMap rather than spatial dimension or geometric guesses.
 
 Validate changes with `python scripts/run_mpi_tests.py` in a compatible MPI/JAX/
-DOLFINx environment. The runner checks 1–4 ranks with timeouts. For example
-changes, also run the affected example under MPI. Preserve existing user edits.
+DOLFINx environment with pytest installed. The runner uses `mpirun` and checks
+1–4 ranks with timeouts. Use pytest assertions, `pytest.raises`, and pytest skip
+markers for tests. All ranks must execute collective tests in the same order; do
+not use pytest-xdist for these tests. For example changes, also run the affected
+example under MPI. Preserve existing user edits.
