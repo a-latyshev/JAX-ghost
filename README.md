@@ -118,8 +118,8 @@ JAX_PLATFORMS=cpu mpirun -n 4 python examples/square.py
 
 Use the MPI transport settings below if needed on the development Mac.
 The example uses float64 throughout and transfers owned global IDs to JAX once.
-It computes `10 + global_id + 100 * step` on the device for two steps, reusing
-the same compiled forward update. Each step checks the complete local vector
+It computes `10 + global_id` on the device and performs one compiled forward
+update. It checks the complete local vector
 against owner values and DOLFINx's `reference.x.scatter_forward()`, then prints
 owned/ghost counts, communication peers, and maximum error per rank.
 

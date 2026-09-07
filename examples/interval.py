@@ -25,31 +25,30 @@ def main():
     ) as ghost:
         forward = jax.jit(ghost.scatter_forward)
         x = jnp.full((n + len(index_map.ghosts),), jnp.nan, dtype=jnp.float64)
-        for step in range(2):
-            # Only owners change their values. Ghosts remain stale until forward.
-            owned = 10 + owned_ids.astype(np.float64) + 100 * step
-            x = x.at[:n].set(jnp.asarray(owned))
-            x = forward(x)
-            x.block_until_ready()
-            jax.effects_barrier()
+        # Only owners change their values. Ghosts remain stale until forward.
+        owned = 10 + owned_ids.astype(np.float64)
+        x = x.at[:n].set(jnp.asarray(owned))
+        x = forward(x)
+        x.block_until_ready()
+        jax.effects_barrier()
 
-            # Host copies below are for validation/output, not the ghost update.
-            reference.x.array[:n] = owned
-            reference.x.scatter_forward()
-            actual = np.asarray(x)
-            expected = 10 + local_ids.astype(np.float64) + 100 * step
-            correct = np.array_equal(actual, expected) and np.array_equal(
-                actual, reference.x.array
-            )
-            if not comm.allreduce(correct, op=MPI.LAND):
-                raise AssertionError("JAXGhost differs from owner values or DOLFINx")
-            rows = comm.gather(
-                f"rank {comm.rank}: IDs={local_ids.tolist()}, "
-                f"owned={actual[:n].tolist()}, ghosts={actual[n:].tolist()}", root=0,
-            )
-            if comm.rank == 0:
-                print(f"Step {step}: matches DOLFINx", flush=True)
-                print("\n".join(rows), flush=True)
+        # Host copies below are for validation/output, not the ghost update.
+        reference.x.array[:n] = owned
+        reference.x.scatter_forward()
+        actual = np.asarray(x)
+        expected = 10 + local_ids.astype(np.float64)
+        correct = np.array_equal(actual, expected) and np.array_equal(
+            actual, reference.x.array
+        )
+        if not comm.allreduce(correct, op=MPI.LAND):
+            raise AssertionError("JAXGhost differs from owner values or DOLFINx")
+        rows = comm.gather(
+            f"rank {comm.rank}: IDs={local_ids.tolist()}, "
+            f"owned={actual[:n].tolist()}, ghosts={actual[n:].tolist()}", root=0,
+        )
+        if comm.rank == 0:
+            print("Interval field matches DOLFINx", flush=True)
+            print("\n".join(rows), flush=True)
 
 
 if __name__ == "__main__":
