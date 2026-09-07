@@ -16,6 +16,10 @@ COMM = MPI.COMM_WORLD
 jax.config.update("jax_enable_x64", True)
 
 
+def expand_ids(ids, block_size):
+    return (np.asarray(ids)[:, None] * block_size + np.arange(block_size)).ravel()
+
+
 def synthetic_map(kind):
     # Unequal owned sizes exercise global-to-local translation.
     sizes = np.arange(2, COMM.size + 2)
@@ -54,11 +58,11 @@ class TestForward:
         errors = COMM.allgather(error)
         assert not any(errors), "\n".join(e for e in errors if e)
 
-    def exercise(self, index_map, reference=None):
-        n = index_map.size_local
-        owned_ids = np.arange(*index_map.local_range)
-        global_ids = np.concatenate((owned_ids, index_map.ghosts))
-        with JAXGhost.from_index_map(index_map, COMM) as ghost:
+    def exercise(self, index_map, reference=None, block_size=1):
+        n = index_map.size_local * block_size
+        owned_ids = expand_ids(np.arange(*index_map.local_range), block_size)
+        global_ids = np.concatenate((owned_ids, expand_ids(index_map.ghosts, block_size)))
+        with JAXGhost.from_index_map(index_map, COMM, block_size=block_size) as ghost:
             for compiled in (False, True):
                 forward = jax.jit(ghost.scatter_forward) if compiled else ghost.scatter_forward
                 for dtype in (np.float32, np.float64):
@@ -137,9 +141,10 @@ class TestForward:
             assert space.dofmap.index_map.size_global > domain.topology.index_map(0).size_global
         self.exercise(space.dofmap.index_map, fem.Function(space, dtype=np.float64))
 
-    def test_invalid_block_size(self):
+    @pytest.mark.parametrize("block_size", (0, -1, 1.5, True, "2"))
+    def test_invalid_block_size(self, block_size):
         with pytest.raises(ValueError, match="block_size"):
-            JAXGhost.from_index_map(synthetic_map("none"), COMM, block_size=2)
+            JAXGhost.from_index_map(synthetic_map("none"), COMM, block_size=block_size)
 
     def test_invalid_metadata_is_collective(self):
         index_map = synthetic_map("none")
@@ -185,12 +190,12 @@ def assert_collective_close(actual, expected, *, rtol=0, atol=0):
 
 
 class TestReverse:
-    def exercise(self, index_map, reference=None):
-        n = index_map.size_local
-        start, stop = index_map.local_range
+    def exercise(self, index_map, reference=None, block_size=1):
+        n = index_map.size_local * block_size
+        start, stop = (v * block_size for v in index_map.local_range)
         owned_ids = np.arange(start, stop)
-        ghost_ids = np.asarray(index_map.ghosts)
-        with JAXGhost.from_index_map(index_map, COMM) as ghost:
+        ghost_ids = expand_ids(index_map.ghosts, block_size)
+        with JAXGhost.from_index_map(index_map, COMM, block_size=block_size) as ghost:
             for compiled in (False, True):
                 reverse = jax.jit(ghost.scatter_reverse) if compiled else ghost.scatter_reverse
                 forward = jax.jit(ghost.scatter_forward) if compiled else ghost.scatter_forward
@@ -260,3 +265,46 @@ class TestReverse:
         space = fem.functionspace(domain, ("Lagrange", degree))
         assert space.dofmap.index_map_bs == 1
         self.exercise(space.dofmap.index_map, fem.Function(space, dtype=np.float64))
+
+
+@pytest.mark.parametrize("block_size", (2, 3))
+@pytest.mark.parametrize("kind", ("irregular", "one_way", "none", "empty_owner"))
+def test_blocked_synthetic(kind, block_size):
+    index_map = synthetic_map(kind)
+    TestForward().exercise(index_map, block_size=block_size)
+    TestReverse().exercise(index_map, block_size=block_size)
+
+
+@pytest.mark.skipif(find_spec("dolfinx") is None, reason="DOLFINx is not installed")
+@pytest.mark.parametrize("dimension", (1, 2, 3))
+@pytest.mark.parametrize("degree", (1, 2, 3))
+@pytest.mark.parametrize("block_size", (2, 3))
+def test_dolfinx_blocked(dimension, degree, block_size):
+    from dolfinx import fem, mesh
+    if dimension == 1:
+        domain = mesh.create_unit_interval(COMM, max(8, 4 * COMM.size))
+    elif dimension == 2:
+        domain = mesh.create_unit_square(COMM, 4, 4)
+    else:
+        domain = mesh.create_unit_cube(COMM, 2, 2, 2)
+    space = fem.functionspace(domain, ("Lagrange", degree, (block_size,)))
+    assert space.dofmap.index_map_bs == block_size
+    reference = fem.Function(space, dtype=np.float64)
+    TestForward().exercise(space.dofmap.index_map, reference, block_size)
+    TestReverse().exercise(space.dofmap.index_map, reference, block_size)
+
+
+@pytest.mark.skipif(COMM.size == 1, reason="requires multiple ranks")
+def test_inconsistent_block_size():
+    with pytest.raises(ValueError, match="identical"):
+        JAXGhost.from_index_map(synthetic_map("none"), COMM, block_size=COMM.rank + 1)
+
+
+@pytest.mark.parametrize("operation", ("scatter_forward", "scatter_reverse"))
+def test_blocked_shape(operation):
+    index_map = synthetic_map("none")
+    with JAXGhost.from_index_map(index_map, COMM, block_size=2) as ghost:
+        assert ghost.block_size == 2
+        assert ghost.n_owned == 2 * index_map.size_local
+        with pytest.raises(ValueError, match="shape"):
+            getattr(ghost, operation)(jnp.zeros((index_map.size_local,)))

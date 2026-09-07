@@ -2,7 +2,7 @@
 
 JIT-compatible ghost updates for JAX arrays in MPI-parallel FEM applications.
 DOLFINx supplies ownership metadata; JAX and mpi4jax exchange owner values into
-local ghost entries. Currently supports scalar P1/P2/P3 forward INSERT and reverse ADD updates on 1D, 2D, and 3D
+local ghost entries. Currently supports scalar and blocked vector P1/P2/P3 forward INSERT and reverse ADD updates on 1D, 2D, and 3D
 meshes, with one local JAX device per MPI rank. CPU execution is tested.
 
 ## Current scope
@@ -45,7 +45,7 @@ mpirun -n 4 python examples/cube.py --degree 3
 
 The interval, square, and cube examples accept `--degree 1`, `2`, or `3` (default: `1`).
 
-In your application, create a plan from a scalar DOLFINx function space `V` and
+In your application, create a plan from a DOLFINx function space `V` and
 pass a JAX array containing `[owned | ghosts]`:
 
 ```python
@@ -59,6 +59,11 @@ with JAXGhost.from_index_map(
     forward = jax.jit(ghost.scatter_forward)
     x = forward(x)  # Preserve owned values and refresh ghosts.
 ```
+
+For vector-valued spaces, pass `V.dofmap.index_map_bs` as above. Keep `x` flat,
+with consecutive components for each DoF; `ghost.n_owned` and `ghost.n_ghost`
+count scalar entries. For example, create a two-component P2 space with
+`V = fem.functionspace(domain, ("Lagrange", 2, (2,)))`.
 
 For assembly contributions, accumulate ghosts back into owners:
 

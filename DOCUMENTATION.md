@@ -173,7 +173,7 @@ oracle. Only validation gathers host data. General floating-point sums use
 tolerances because accumulation order can differ between implementations.
 
 Reverse ADD does not itself enable automatic differentiation of the scatterer.
-INSERT mode, block-valued fields, differentiation, and performance optimization
+INSERT mode, differentiation, and performance optimization
 remain separate work.
 
 ### Scalar field on a 2D square
@@ -345,7 +345,8 @@ documented in [MPICH issue 6856](https://github.com/pmodels/mpich/issues/6856).
 | Local numerical kernels | Yes | JAX arrays |
 | `ghost.close()` | No | Wait for effects and release the MPI communicator |
 
-- Use scalar entries (`block_size=1`) and shape `(n_owned + n_ghost,)`.
+- Use a positive integer `block_size` (default `1`), identical on all ranks,
+  and shape `(n_owned + n_ghost,)`; these counts include all scalar components.
   Enable `jax_enable_x64` before creating arrays to use float64.
 - All participating ranks must call setup and updates in the same sequence,
   with matching numerical dtypes. Shapes and dtypes are checked locally;
@@ -461,3 +462,26 @@ x_local = scatterer.forward(x_owned)
 x_owned = scatterer.reverse_add(x_local)
 y_owned = distributed_spmv(A_local, x_owned, scatterer)
 ```
+
+
+## Block-valued fields
+
+Pass `block_size=V.dofmap.index_map_bs` for a blocked DOLFINx space, for example
+`fem.functionspace(domain, ("Lagrange", 2, (2,)))`. Both forward INSERT and reverse
+ADD operate component by component. The input stays flat in DOLFINx order:
+`[owned0_c0, owned0_c1, owned1_c0, owned1_c1, ... | ghost0_c0, ghost0_c1, ...]`.
+`ghost.block_size` records the block size; `ghost.n_owned` and `ghost.n_ghost`
+count scalar entries, so the input length is
+`block_size * (index_map.size_local + index_map.num_ghosts)`.
+
+Following DOLFINx's C++ Scatterer, setup exchanges block global IDs and expands
+packing indices as `block_size * index + component`. Counts and offsets are
+scaled by block size before creating the runtime plan. This preserves component
+and ghost ordering without introducing runtime reshaping or host transfers.
+The communication algorithm and indexed forward SET / reverse ADD are unchanged.
+This supports uniform fixed-size blocks, not arbitrary mixed-space layouts.
+
+MPI tests cover block sizes 2 and 3, P1–P3 in 1D–3D, component-dependent values,
+eager/JIT execution, float32/float64, repeated reverse accumulation and forward
+refresh against DOLFINx. Synthetic cases include unsorted ghosts, asymmetric
+messages, multiple contributors, empty owned regions and no communication.
