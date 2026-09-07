@@ -158,16 +158,105 @@ class TestForward:
         with pytest.raises(ValueError, match="outside"):
             JAXGhost.from_index_map(index_map, COMM)
 
-    def test_shape_dtype_and_close(self):
+    @pytest.mark.parametrize("operation", ("scatter_forward", "scatter_reverse"))
+    def test_shape_dtype_and_close(self, operation):
         ghost = JAXGhost.from_index_map(synthetic_map("none"), COMM)
         x = jnp.zeros((ghost.n_owned,), dtype=jnp.float32)
         with pytest.raises(TypeError, match="JAX array"):
-            ghost.scatter_forward(np.zeros((ghost.n_owned,), dtype=np.float32))
+            getattr(ghost, operation)(np.zeros((ghost.n_owned,), dtype=np.float32))
         with pytest.raises(ValueError, match="shape"):
-            ghost.scatter_forward(x[:, None])
+            getattr(ghost, operation)(x[:, None])
         with pytest.raises(TypeError, match="float32 and float64"):
-            ghost.scatter_forward(x.astype(jnp.int32))
+            getattr(ghost, operation)(x.astype(jnp.int32))
         ghost.close()
         ghost.close()
         with pytest.raises(RuntimeError, match="closed"):
-            ghost.scatter_forward(x)
+            getattr(ghost, operation)(x)
+
+
+def assert_collective_close(actual, expected, *, rtol=0, atol=0):
+    error = None
+    try:
+        np.testing.assert_allclose(actual, expected, rtol=rtol, atol=atol)
+    except AssertionError as exc:
+        error = f"rank {COMM.rank}: {exc}"
+    errors = COMM.allgather(error)
+    assert not any(errors), "\n".join(e for e in errors if e)
+
+
+class TestReverse:
+    def exercise(self, index_map, reference=None):
+        n = index_map.size_local
+        start, stop = index_map.local_range
+        owned_ids = np.arange(start, stop)
+        ghost_ids = np.asarray(index_map.ghosts)
+        with JAXGhost.from_index_map(index_map, COMM) as ghost:
+            for compiled in (False, True):
+                reverse = jax.jit(ghost.scatter_reverse) if compiled else ghost.scatter_reverse
+                forward = jax.jit(ghost.scatter_forward) if compiled else ghost.scatter_forward
+                for dtype in (np.float32, np.float64):
+                    initial_owned = (10 + owned_ids * 0.1).astype(dtype)
+                    contributions = ((COMM.rank + 1) * 0.3 + ghost_ids * 0.01).astype(dtype)
+                    expected = np.concatenate((initial_owned, contributions))
+                    x = jnp.asarray(expected)
+                    # Independent, global-ID-based oracle, used only by tests.
+                    requests = COMM.allgather((ghost_ids, contributions))
+                    if reference is not None:
+                        reference.x.array[:] = expected
+                    tolerance = 32 * np.finfo(dtype).eps
+                    for _ in range(2):
+                        before = np.asarray(x).copy()
+                        updated = reverse(x)
+                        updated.block_until_ready()
+                        jax.effects_barrier()
+                        for ids, values in requests:
+                            mask = (ids >= start) & (ids < stop)
+                            np.add.at(expected[:n], ids[mask] - start, values[mask])
+                        assert isinstance(updated, jax.Array)
+                        assert updated.devices() == x.devices()
+                        assert_collective_close(np.asarray(x), before)
+                        assert_collective_close(np.asarray(updated)[n:], contributions)
+                        assert_collective_close(np.asarray(updated), expected,
+                                                rtol=tolerance, atol=tolerance)
+                        if reference is not None:
+                            from dolfinx import la
+                            reference.x.scatter_reverse(la.InsertMode.add)
+                            assert_collective_close(np.asarray(updated), reference.x.array,
+                                                    rtol=tolerance, atol=tolerance)
+                        x = updated
+
+                    # Ghosts contain contributions until an explicit forward refresh.
+                    all_owned = COMM.allgather((owned_ids, expected[:n].copy()))
+                    owner_values = {int(g): v for ids, values in all_owned
+                                    for g, v in zip(ids, values)}
+                    expected[n:] = [owner_values[int(g)] for g in ghost_ids]
+                    refreshed = forward(x)
+                    refreshed.block_until_ready()
+                    jax.effects_barrier()
+                    assert_collective_close(np.asarray(refreshed), expected,
+                                            rtol=tolerance, atol=tolerance)
+                    if reference is not None:
+                        reference.x.scatter_forward()
+                        assert_collective_close(np.asarray(refreshed), reference.x.array,
+                                                rtol=tolerance, atol=tolerance)
+
+    @pytest.mark.parametrize("kind", ("irregular", "one_way", "none", "empty_owner"))
+    def test_synthetic(self, kind):
+        # With >=3 ranks, one_way has multiple senders adding to rank 0's same
+        # owned entries. Rank 0 has no ghosts; other ranks only send in reverse.
+        self.exercise(synthetic_map(kind))
+
+    @pytest.mark.skipif(find_spec("dolfinx") is None, reason="DOLFINx is not installed")
+    @pytest.mark.parametrize("dimension", (1, 2, 3))
+    @pytest.mark.parametrize("degree", (1, 2, 3), ids=("P1", "P2", "P3"))
+    def test_dolfinx(self, dimension, degree):
+        from dolfinx import fem, mesh
+        if dimension == 1:
+            domain = mesh.create_unit_interval(COMM, max(8, 4 * COMM.size))
+        elif dimension == 2:
+            domain = mesh.create_unit_square(COMM, 8, 8, cell_type=mesh.CellType.triangle)
+        else:
+            domain = mesh.create_unit_cube(COMM, 4, 4, 4, cell_type=mesh.CellType.tetrahedron)
+        space = fem.functionspace(domain, ("Lagrange", degree))
+        assert space.dofmap.index_map_bs == 1
+        self.exercise(space.dofmap.index_map, fem.Function(space, dtype=np.float64))

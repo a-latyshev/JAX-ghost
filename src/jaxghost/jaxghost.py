@@ -1,7 +1,7 @@
-"""Static host-side setup and device-side forward scatter.
+"""Static host-side setup and device-side forward/reverse scatter.
 
 Only construction communicates NumPy metadata through mpi4py. Numerical
-values passed to scatter_forward stay in JAX arrays throughout the operation.
+values passed to either scatter stay in JAX arrays throughout the operation.
 """
 
 from __future__ import annotations
@@ -103,6 +103,16 @@ class JAXGhost:
         self._closed = False
         return self
 
+    def _validate_vector(self, x, operation):
+        if self._closed:
+            raise RuntimeError("scatterer is closed")
+        if not isinstance(x, (jax.Array, jax.core.Tracer)):
+            raise TypeError(f"{operation} expects a JAX array already on the device")
+        if x.ndim != 1 or x.shape[0] != self.n_owned + self.n_ghost:
+            raise ValueError(f"expected shape ({self.n_owned + self.n_ghost},), got {x.shape}")
+        if x.dtype not in (jnp.dtype("float32"), jnp.dtype("float64")):
+            raise TypeError(f"{operation} supports float32 and float64")
+
     def scatter_forward(self, x):
         """Return ``x`` with ghosts overwritten and owned values preserved.
 
@@ -113,14 +123,7 @@ class JAXGhost:
         is JIT compatible; construction and close are not. Differentiation
         through the communication is outside the supported interface.
         """
-        if self._closed:
-            raise RuntimeError("scatterer is closed")
-        if not isinstance(x, (jax.Array, jax.core.Tracer)):
-            raise TypeError("scatter_forward expects a JAX array already on the device")
-        if x.ndim != 1 or x.shape[0] != self.n_owned + self.n_ghost:
-            raise ValueError(f"expected shape ({self.n_owned + self.n_ghost},), got {x.shape}")
-        if x.dtype not in (jnp.dtype("float32"), jnp.dtype("float64")):
-            raise TypeError("scatter_forward supports float32 and float64")
+        self._validate_vector(x, "scatter_forward")
 
         if not self.peers:
             return x
@@ -145,6 +148,43 @@ class JAXGhost:
             return x
         received = jnp.concatenate(received_parts)
         return x.at[self.receive_positions].set(received)
+
+    def scatter_reverse(self, x):
+        """Add remote ghost contributions to owners; return the full local array.
+
+        Matches DOLFINx scatter_reverse(InsertMode.add), with immutable JAX
+        semantics: the input is preserved, and the returned array contains
+        updated owned values and unchanged ghosts. Repeated calls add the ghost
+        contributions again. Call scatter_forward separately to refresh ghosts.
+
+        Accepts the same device-array shape and dtype as scatter_forward and
+        supports jax.jit. INSERT and automatic differentiation are not supported.
+        """
+        self._validate_vector(x, "scatter_reverse")
+        if not self.peers:
+            return x
+
+        # Reverse DOLFINx's packing direction: forward receive positions now
+        # identify outgoing ghost contributions, grouped by their owners.
+        packed = x[self.receive_positions]
+        received_parts = []
+        for i, peer in enumerate(self.peers):
+            send = packed[self.recv_offsets[i] : self.recv_offsets[i + 1]]
+            template = jnp.empty((self.send_counts[i],), dtype=x.dtype)
+            received = mpi4jax.sendrecv(
+                send, template, source=peer, dest=peer,
+                sendtag=1, recvtag=1, comm=self._comm,
+            )
+            if self.send_counts[i]:
+                received_parts.append(received)
+
+        # Ordered effects retain sends even if this rank receives no additions.
+        if not received_parts:
+            return x
+        received = jnp.concatenate(received_parts)
+        # Several peers may contribute to the same owned index. Indexed ADD
+        # accumulates every occurrence, rather than overwriting duplicate indices.
+        return x.at[self.send_indices].add(received)
 
     def close(self):
         """Collectively release the communicator after all calls finish.
