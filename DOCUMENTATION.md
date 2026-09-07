@@ -5,6 +5,7 @@ See [README.md](README.md) for a quick introduction, installation, and usage.
 - [Current implementation](#first-implementation-scalar-forward-update)
 - [Data flow](#how-data-moves)
 - [2D example](#scalar-field-on-a-2d-square)
+- [3D example](#scalar-field-on-a-3d-cube)
 - [Installation and testing details](#installation-and-execution)
 - [Verified environment and macOS troubleshooting](#verified-environment-and-macos-setup)
 - [Supported behavior and lifetime](#supported-behavior-and-lifetime)
@@ -142,6 +143,22 @@ layouts, checking repeated eager/JIT updates, float32/float64 values, device
 placement, input preservation, and agreement with DOLFINx. Contributor guidance
 in [AGENTS.md](AGENTS.md) records the DOLFINx-first implementation strategy.
 
+### Scalar field on a 3D cube
+
+`examples/cube.py` uses DOLFINx's `create_unit_cube` with a 4 × 4 × 4
+subdivision, tetrahedral cells, and a scalar continuous P1 space. Run it with:
+
+```bash
+JAX_PLATFORMS=cpu mpirun -n 4 python examples/cube.py
+```
+
+Like the square example, it uses float64, computes owned values on the JAX
+device, and performs a single compiled forward update. It validates against
+owner values and DOLFINx, reporting counts, peers, and maximum error per rank.
+The existing IndexMap-based scatterer needs no changes for 3D: storage remains
+`[owned | ghosts]`. The MPI suite also checks the cube with repeated eager/JIT
+updates and both float32 and float64 values.
+
 ### Installation and execution
 
 Use an environment containing DOLFINx, JAX, mpi4py, and the pinned
@@ -174,7 +191,7 @@ independent two-rank compiled mpi4jax smoke test, then runs pytest cases with
 1, 2, 3, and 4 ranks. Each MPI job has a 120-second timeout and timed-out process
 groups are terminated. Options include `--mpirun /path/to/mpirun`,
 `--timeout 180`, and `--ranks 1 2 3`. Pytest is required for the test suite. The
-DOLFINx tests are explicitly skipped if DOLFINx is absent; both examples require it.
+DOLFINx tests are explicitly skipped if DOLFINx is absent; all examples require it.
 
 One local JAX device per rank is enforced during construction. CPU device count
 does not itself bind a process to one CPU core; use your MPI launcher's binding
