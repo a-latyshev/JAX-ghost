@@ -69,7 +69,14 @@ At runtime the fixed peer loop is unrolled by JIT:
 1. Gather `x[send_indices]` into a packed JAX buffer.
 2. Exchange each peer's slice using `mpi4jax.sendrecv`. The receive template
    supplies its shape and dtype; the returned array contains received values.
-3. Set `x[receive_positions]` from the received values using JAX indexed updates.
+3. Concatenate received JAX buffers and set `x[receive_positions]` in one indexed
+   update. A send-only rank returns its unchanged array after issuing its exchanges.
+
+Pass a JAX array already on the local device. Direct calls reject NumPy inputs.
+When wrapping the method with `jax.jit`, JAX can implicitly transfer host inputs
+before entering the method; callers should still place their vectors on the
+device once, outside the repeated computation. The Python peer loop and receive
+list describe the static computation during tracing; vector values stay in JAX.
 
 There is no application-level NumPy conversion, DOLFINx vector synchronization,
 or global vector gather inside the forward update. CPU is treated as a JAX
