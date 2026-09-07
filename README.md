@@ -106,6 +106,34 @@ Here rank 0 packs local index 2, rank 1 packs local index 0, and both unpack
 into local index 3. The DOLFINx example may produce a different partition;
 the implementation always derives these indices from its actual metadata.
 
+### Scalar field on a 2D square
+
+`examples/square.py` creates an 8 × 8 subdivision of the unit square with
+triangular cells and a scalar continuous P1 space. Run it with:
+
+```bash
+JAX_PLATFORMS=cpu mpirun -n 2 python examples/square.py
+JAX_PLATFORMS=cpu mpirun -n 4 python examples/square.py
+```
+
+Use the MPI transport settings below if needed on the development Mac.
+The example uses float64 throughout and transfers owned global IDs to JAX once.
+It computes `10 + global_id + 100 * step` on the device for two steps, reusing
+the same compiled forward update. Each step checks the complete local vector
+against owner values and DOLFINx's `reference.x.scatter_forward()`, then prints
+owned/ghost counts, communication peers, and maximum error per rank.
+
+Mesh dimension changes the ownership pattern, not the vector storage format:
+the scalar 2D field still uses a flat `[owned | ghosts]` JAX array. As in
+DOLFINx's C++ `Scatterer`, communication is derived from `IndexMap`, so the
+existing `JAXGhost.scatter_forward()` needs no dimension-specific changes.
+The partition and peer ranks are determined by DOLFINx, not geometric guesses.
+
+The MPI suite includes this square mesh alongside the interval and synthetic
+layouts, checking repeated eager/JIT updates, float32/float64 values, device
+placement, input preservation, and agreement with DOLFINx. Contributor guidance
+in [AGENTS.md](AGENTS.md) records the DOLFINx-first implementation strategy.
+
 ### Installation and execution
 
 Use an environment containing DOLFINx, JAX, mpi4py, and the pinned
@@ -118,16 +146,27 @@ python -m pip install --no-deps --no-build-isolation -e .
 export JAX_PLATFORMS=cpu
 export JAX_NUM_CPU_DEVICES=1
 export OMP_NUM_THREADS=1
-mpiexec -n 2 python examples/interval.py
+mpirun -n 2 python examples/interval.py
 python scripts/run_mpi_tests.py
 ```
 
+Install pytest if needed with `python -m pip install pytest`. To run the
+correctness tests directly on four ranks:
+
+```bash
+mpirun -n 4 python -m pytest tests/test_mpi.py -v
+```
+
+Use `scripts/run_mpi_tests.py` for timeout protection. Do not distribute these collective
+tests with pytest-xdist: every MPI rank must execute the same tests in the same
+order.
+
 The test runner uses the current Python interpreter, first executes an
-independent two-rank compiled mpi4jax smoke test, then runs unittest cases with
+independent two-rank compiled mpi4jax smoke test, then runs pytest cases with
 1, 2, 3, and 4 ranks. Each MPI job has a 120-second timeout and timed-out process
-groups are terminated. Options include `--mpiexec /path/to/mpiexec`,
-`--timeout 180`, and `--ranks 1 2 3`. No pytest dependency is required. The
-DOLFINx test is explicitly skipped if DOLFINx is absent; the example requires it.
+groups are terminated. Options include `--mpirun /path/to/mpirun`,
+`--timeout 180`, and `--ranks 1 2 3`. Pytest is required for the test suite. The
+DOLFINx tests are explicitly skipped if DOLFINx is absent; both examples require it.
 
 One local JAX device per rank is enforced during construction. CPU device count
 does not itself bind a process to one CPU core; use your MPI launcher's binding
