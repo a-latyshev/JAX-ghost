@@ -275,9 +275,9 @@ order.
 
 The test runner uses the current Python interpreter, first executes an
 independent two-rank compiled mpi4jax smoke test, then runs pytest cases with
-1, 2, 3, and 4 ranks. Each MPI job has a 300-second timeout and timed-out process
+1, 2, 3, and 4 ranks. Each MPI job has a 120-second timeout and timed-out process
 groups are terminated. Options include `--mpirun /path/to/mpirun`,
-`--timeout 600`, and `--ranks 1 2 3`. Pytest is required for the test suite. The
+`--timeout 300`, and `--ranks 1 2 3`. Pytest is required for the test suite. The
 DOLFINx tests are explicitly skipped if DOLFINx is absent; all examples require it.
 
 One local JAX device per rank is enforced during construction. CPU device count
@@ -481,20 +481,23 @@ and ghost ordering without introducing runtime reshaping or host transfers.
 The communication algorithm and indexed forward SET / reverse ADD are unchanged.
 This supports uniform fixed-size blocks, not arbitrary mixed-space layouts.
 
-MPI tests cover block sizes 2 and 3, P1–P3 in 1D–3D, component-dependent values,
+MPI tests cover representative scalar, vector and tensor layouts, component-dependent values,
 eager/JIT execution, float32/float64, repeated reverse accumulation and forward
 refresh against DOLFINx. Synthetic cases include unsorted ghosts, asymmetric
 messages, multiple contributors, empty owned regions and no communication.
 
 
-Full tensor fields through order four are also checked against DOLFINx using
-actual tensor-valued Lagrange spaces. The tested value shapes are `(2, 2)`,
-`(3, 3)`, `(2, 2, 2)`, `(3, 3, 3)`, `(2, 2, 2, 2)` and `(3, 3, 3, 3)`
-(block sizes 4, 9, 8, 27, 16 and 81). Tensor order describes the number of
-component axes, independently of mesh dimension and polynomial degree.
-These cases cover P1–P3 in 1D–3D and reuse the forward/reverse checks above,
-including input preservation and unchanged ghosts after reverse ADD.
-Symmetry-reduced tensor storage is not covered by these tests.
+Full tensor fields through order four are checked against DOLFINx using actual
+tensor-valued spaces: `(2, 2)`, `(2, 2, 2)` and `(3, 3, 3, 3)` (block sizes
+4, 8 and 81). Tensor order is independent of mesh dimension and polynomial
+degree. Symmetry-reduced tensor storage is not covered.
+
+The essential suite selects eight regular-mesh layouts: scalar interval P1,
+square P2 and cube P3; two vector layouts; and one layout per tensor order.
+It also checks four synthetic communication patterns, one irregular P2 vector
+layout, and input/lifetime validation. Every numerical case retains eager/JIT,
+float32/float64, repeated updates, input preservation, and reverse-then-forward
+checks. This is representative coverage, not every combination of features.
 
 
 ## Irregular 2D geometry and uneven partitions
@@ -508,7 +511,7 @@ partition, not a deliberately severe load imbalance: unusual geometry alone
 does not defeat DOLFINx's graph partitioner's balancing objective.
 
 The example reports owned cells, owned/ghost DoFs, peers and forward error per
-rank. Tests additionally check reverse ADD and forward refresh for P1–P3 scalar,
-vector and second-order tensor fields, eager/JIT and float32/float64, using the
+rank. Tests additionally check reverse ADD and forward refresh for a P2 vector
+field, eager/JIT and float32/float64, using the
 same DOLFINx and global-ID comparisons as the regular-mesh tests. Cell imbalance
 does not imply a particular DoF imbalance or geometric ordering of ranks.

@@ -12,7 +12,7 @@ import sys
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mpirun", default="mpirun", help="MPI launcher executable")
-    parser.add_argument("--timeout", type=float, default=300, help="seconds per MPI job")
+    parser.add_argument("--timeout", type=float, default=120, help="seconds per MPI job")
     parser.add_argument("--ranks", type=int, nargs="+", default=[1, 2, 3, 4])
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
