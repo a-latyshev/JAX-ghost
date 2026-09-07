@@ -41,6 +41,7 @@ export JAX_NUM_CPU_DEVICES=1
 mpirun -n 2 python examples/interval.py
 mpirun -n 4 python examples/square.py --degree 2
 mpirun -n 4 python examples/cube.py --degree 3
+mpirun -n 4 python examples/irregular.py --degree 2
 ```
 
 The interval, square, and cube examples accept `--degree 1`, `2`, or `3` (default: `1`).
@@ -83,6 +84,7 @@ Run the pytest suite on 1–4 MPI ranks with timeout protection:
 ```bash
 python -m pip install pytest  # If not already installed.
 python scripts/run_mpi_tests.py
+mpirun -n 3 python -m pytest tests
 ```
 
 See [DOCUMENTATION.md](DOCUMENTATION.md) for the data-flow diagram, implementation
