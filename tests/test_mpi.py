@@ -95,34 +95,46 @@ class TestForward:
         self.exercise(synthetic_map("empty_owner"))
 
     @pytest.mark.skipif(find_spec("dolfinx") is None, reason="DOLFINx is not installed")
-    def test_dolfinx_interval(self):
+    @pytest.mark.parametrize("degree", (1, 2, 3), ids=("P1", "P2", "P3"))
+    def test_dolfinx_interval(self, degree):
         from dolfinx import fem, mesh
 
         domain = mesh.create_unit_interval(COMM, max(8, 4 * COMM.size))
-        space = fem.functionspace(domain, ("Lagrange", 1))
+        space = fem.functionspace(domain, ("Lagrange", degree))
         assert space.dofmap.index_map_bs == 1
+        if degree > 1:
+            # Higher-order spaces include DoFs beyond mesh vertices.
+            assert space.dofmap.index_map.size_global > domain.topology.index_map(0).size_global
         self.exercise(space.dofmap.index_map, fem.Function(space, dtype=np.float64))
 
     @pytest.mark.skipif(find_spec("dolfinx") is None, reason="DOLFINx is not installed")
-    def test_dolfinx_square(self):
+    @pytest.mark.parametrize("degree", (1, 2, 3), ids=("P1", "P2", "P3"))
+    def test_dolfinx_square(self, degree):
         from dolfinx import fem, mesh
 
         domain = mesh.create_unit_square(
             COMM, 8, 8, cell_type=mesh.CellType.triangle, dtype=np.float64
         )
-        space = fem.functionspace(domain, ("Lagrange", 1))
+        space = fem.functionspace(domain, ("Lagrange", degree))
         assert space.dofmap.index_map_bs == 1
+        if degree > 1:
+            # Higher-order spaces include DoFs beyond mesh vertices.
+            assert space.dofmap.index_map.size_global > domain.topology.index_map(0).size_global
         self.exercise(space.dofmap.index_map, fem.Function(space, dtype=np.float64))
 
     @pytest.mark.skipif(find_spec("dolfinx") is None, reason="DOLFINx is not installed")
-    def test_dolfinx_cube(self):
+    @pytest.mark.parametrize("degree", (1, 2, 3), ids=("P1", "P2", "P3"))
+    def test_dolfinx_cube(self, degree):
         from dolfinx import fem, mesh
 
         domain = mesh.create_unit_cube(
             COMM, 4, 4, 4, cell_type=mesh.CellType.tetrahedron, dtype=np.float64
         )
-        space = fem.functionspace(domain, ("Lagrange", 1))
+        space = fem.functionspace(domain, ("Lagrange", degree))
         assert space.dofmap.index_map_bs == 1
+        if degree > 1:
+            # Higher-order spaces include DoFs beyond mesh vertices.
+            assert space.dofmap.index_map.size_global > domain.topology.index_map(0).size_global
         self.exercise(space.dofmap.index_map, fem.Function(space, dtype=np.float64))
 
     def test_invalid_block_size(self):

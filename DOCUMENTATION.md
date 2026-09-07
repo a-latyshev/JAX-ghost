@@ -6,6 +6,7 @@ See [README.md](README.md) for a quick introduction, installation, and usage.
 - [Data flow](#how-data-moves)
 - [2D example](#scalar-field-on-a-2d-square)
 - [3D example](#scalar-field-on-a-3d-cube)
+- [Higher-order scalar elements](#higher-order-scalar-elements)
 - [Installation and testing details](#installation-and-execution)
 - [Verified environment and macOS troubleshooting](#verified-environment-and-macos-setup)
 - [Supported behavior and lifetime](#supported-behavior-and-lifetime)
@@ -158,6 +159,32 @@ owner values and DOLFINx, reporting counts, peers, and maximum error per rank.
 The existing IndexMap-based scatterer needs no changes for 3D: storage remains
 `[owned | ghosts]`. The MPI suite also checks the cube with repeated eager/JIT
 updates and both float32 and float64 values.
+
+### Higher-order scalar elements
+
+All three examples support continuous scalar Lagrange P1, P2, and P3 spaces:
+
+```bash
+mpirun -n 2 python examples/interval.py --degree 2
+mpirun -n 4 python examples/square.py --degree 3
+mpirun -n 4 python examples/cube.py --degree 3
+```
+
+The default degree remains 1, and each example performs one forward update.
+DOLFINx's `fem.functionspace(domain, ("Lagrange", degree))` constructs the
+appropriate element and DoF map. Its IndexMap includes all owned and ghost
+DoFs, not only vertex DoFs. JAXGhost uses that complete layout without adding
+special cases for edges, faces, or cell interiors.
+
+Polynomial degree is not block size: these scalar spaces still have
+`index_map_bs == 1`. Build a new plan when constructing a different space;
+a P1 plan must not be reused for a P2 or P3 layout. This extension concerns
+coefficient synchronization only, not element evaluation or assembly.
+
+The pytest suite parametrizes all three mesh cases over degrees 1–3. For each,
+it compares every local coefficient with its owner and DOLFINx in eager and
+compiled execution, using float32/float64 and repeated updates. It also checks
+that P2/P3 spaces contain more global DoFs than mesh vertices.
 
 ### Installation and execution
 
