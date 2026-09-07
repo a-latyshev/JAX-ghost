@@ -127,6 +127,56 @@ does not itself bind a process to one CPU core; use your MPI launcher's binding
 options or scheduler configuration if physical core placement is required.
 No `jax.distributed.initialize`, `pmap`, or global JAX sharding is needed.
 
+### Verified environment and macOS setup
+
+Verified on macOS ARM64 on 2026-09-07:
+
+| Dependency | Tested version |
+| --- | --- |
+| Python | 3.11.15 |
+| JAX / jaxlib | 0.10.2 / 0.10.2 |
+| mpi4jax | 0.9.1.post1, built natively for ARM64 |
+| mpi4py | 4.1.2 |
+| MPI | MPICH 5.0.1, ch4:ofi, TCP provider |
+| NumPy | 2.4.6 |
+| DOLFINx | 0.11.0 |
+
+The compiled two-rank smoke test and the correctness suite passed with 1, 2, 3,
+and 4 ranks, including the DOLFINx reference, float32/float64, and repeated eager
+and compiled updates. The single-rank run skips the test requiring an invalid
+remote request; all multi-rank cases run. GPU execution has not been tested.
+
+The existing `fenicsx-0.11.0` conda environment on the development machine had
+an x86_64 mpi4jax extension despite an ARM64 Python. Validation used an isolated
+virtual environment inheriting that conda environment, with mpi4jax rebuilt
+for ARM64. The original conda environment was not modified. To reproduce this
+repair locally from the repository root:
+
+```bash
+conda activate fenicsx-0.11.0
+python -m venv --system-site-packages .venv
+source .venv/bin/activate
+python -m pip install nanobind wheel
+MPI4JAX_BUILD_MPICC="$CONDA_PREFIX/bin/mpicc" python -m pip install \
+  --no-deps --no-build-isolation --no-binary=mpi4jax --ignore-installed \
+  mpi4jax==0.9.1.post1
+python -m pip install --no-deps --no-build-isolation -e .
+```
+
+The default libfabric sockets provider also hung in `MPI_Finalize`, including
+for a minimal mpi4py-only program. The complete test runs exited normally with:
+
+```bash
+export FI_PROVIDER=tcp
+export FI_TCP_IFACE=en0
+python scripts/run_mpi_tests.py
+```
+
+These are development-machine transport settings, not library defaults. Select
+the appropriate interface for your machine; do not apply `en0` to a cluster
+without checking its network setup. Related macOS sockets-provider behavior is
+documented in [MPICH issue 6856](https://github.com/pmodels/mpich/issues/6856).
+
 ### Supported behavior and lifetime
 
 | Operation | Inside `jax.jit`? | Data |

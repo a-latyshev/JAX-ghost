@@ -11,7 +11,7 @@ from jaxghost import JAXGhost
 
 def main():
     comm = MPI.COMM_WORLD
-    domain = mesh.create_unit_interval(comm, max(8, 4 * comm.size))
+    domain = mesh.create_unit_interval(comm, max(8, 4 * comm.size), dtype=np.float32)
     space = fem.functionspace(domain, ("Lagrange", 1))
     index_map = space.dofmap.index_map
     n = index_map.size_local
