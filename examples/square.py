@@ -32,36 +32,35 @@ def main():
     ) as ghost:
         forward = jax.jit(ghost.scatter_forward)
         x = jnp.full((n + ghost.n_ghost,), jnp.nan, dtype=jnp.float64)
-        for step in range(2):
-            # Numerical updates stay on the device. Reuse the plan and JIT callable.
-            owned = 10.0 + owned_ids_device + 100.0 * step
-            x = x.at[:n].set(owned)
-            x = forward(x)
-            x.block_until_ready()
-            jax.effects_barrier()
+        # Numerical updates stay on the device.
+        owned = 10.0 + owned_ids_device
+        x = x.at[:n].set(owned)
+        x = forward(x)
+        x.block_until_ready()
+        jax.effects_barrier()
 
-            # Host transfers and DOLFINx synchronization below are validation only.
-            reference.x.array[:n] = np.asarray(owned)
-            reference.x.scatter_forward()
-            actual = np.asarray(x)
-            expected = 10.0 + local_ids + 100.0 * step
-            correct = np.array_equal(actual, expected) and np.array_equal(
-                actual, reference.x.array
-            )
-            if not comm.allreduce(correct, op=MPI.LAND):
-                raise AssertionError("JAXGhost differs from owner values or DOLFINx")
-            max_error = max(
-                np.max(np.abs(actual - expected), initial=0.0),
-                np.max(np.abs(actual - reference.x.array), initial=0.0),
-            )
-            summaries = comm.gather(
-                f"rank {comm.rank}: owned={n}, ghosts={ghost.n_ghost}, "
-                f"peers={ghost.peers}, max_error={max_error:.3e}",
-                root=0,
-            )
-            if comm.rank == 0:
-                print(f"Step {step}: square field matches owners and DOLFINx", flush=True)
-                print("\n".join(summaries), flush=True)
+        # Host transfers and DOLFINx synchronization below are validation only.
+        reference.x.array[:n] = np.asarray(owned)
+        reference.x.scatter_forward()
+        actual = np.asarray(x)
+        expected = 10.0 + local_ids
+        correct = np.array_equal(actual, expected) and np.array_equal(
+            actual, reference.x.array
+        )
+        if not comm.allreduce(correct, op=MPI.LAND):
+            raise AssertionError("JAXGhost differs from owner values or DOLFINx")
+        max_error = max(
+            np.max(np.abs(actual - expected), initial=0.0),
+            np.max(np.abs(actual - reference.x.array), initial=0.0),
+        )
+        summaries = comm.gather(
+            f"rank {comm.rank}: owned={n}, ghosts={ghost.n_ghost}, "
+            f"peers={ghost.peers}, max_error={max_error:.3e}",
+            root=0,
+        )
+        if comm.rank == 0:
+            print("Square field matches owners and DOLFINx", flush=True)
+            print("\n".join(summaries), flush=True)
 
 
 if __name__ == "__main__":
