@@ -103,7 +103,7 @@ class TestForward:
     def test_dolfinx_interval(self, degree):
         from dolfinx import fem, mesh
 
-        domain = mesh.create_unit_interval(COMM, max(8, 4 * COMM.size))
+        domain = mesh.create_unit_interval(COMM, 8)
         space = fem.functionspace(domain, ("Lagrange", degree))
         assert space.dofmap.index_map_bs == 1
         if degree > 1:
@@ -257,7 +257,7 @@ class TestReverse:
     def test_dolfinx(self, dimension, degree):
         from dolfinx import fem, mesh
         if dimension == 1:
-            domain = mesh.create_unit_interval(COMM, max(8, 4 * COMM.size))
+            domain = mesh.create_unit_interval(COMM, 8)
         elif dimension == 2:
             domain = mesh.create_unit_square(COMM, 8, 8, cell_type=mesh.CellType.triangle)
         else:
@@ -278,16 +278,26 @@ def test_blocked_synthetic(kind, block_size):
 @pytest.mark.skipif(find_spec("dolfinx") is None, reason="DOLFINx is not installed")
 @pytest.mark.parametrize("dimension", (1, 2, 3))
 @pytest.mark.parametrize("degree", (1, 2, 3))
-@pytest.mark.parametrize("block_size", (2, 3))
-def test_dolfinx_blocked(dimension, degree, block_size):
+@pytest.mark.parametrize(
+    "value_shape",
+    ((2,), (3,), (2, 2), (3, 3), (2, 2, 2), (3, 3, 3),
+     (2, 2, 2, 2), (3, 3, 3, 3)),
+    ids=("vector2", "vector3", "tensor2-order2", "tensor3-order2",
+         "tensor2-order3", "tensor3-order3", "tensor2-order4", "tensor3-order4"),
+)
+def test_dolfinx_blocked(dimension, degree, value_shape):
     from dolfinx import fem, mesh
     if dimension == 1:
-        domain = mesh.create_unit_interval(COMM, max(8, 4 * COMM.size))
+        domain = mesh.create_unit_interval(COMM, 8)
     elif dimension == 2:
         domain = mesh.create_unit_square(COMM, 4, 4)
     else:
         domain = mesh.create_unit_cube(COMM, 2, 2, 2)
-    space = fem.functionspace(domain, ("Lagrange", degree, (block_size,)))
+    space = fem.functionspace(domain, ("Lagrange", degree, value_shape))
+    # Full tensors use one consecutive block of components per scalar DoF.
+    # Use the actual DOLFINx space, rather than a vector with the same size.
+    block_size = int(np.prod(value_shape))
+    assert tuple(space.element.value_shape) == value_shape
     assert space.dofmap.index_map_bs == block_size
     reference = fem.Function(space, dtype=np.float64)
     TestForward().exercise(space.dofmap.index_map, reference, block_size)
@@ -308,3 +318,23 @@ def test_blocked_shape(operation):
         assert ghost.n_owned == 2 * index_map.size_local
         with pytest.raises(ValueError, match="shape"):
             getattr(ghost, operation)(jnp.zeros((index_map.size_local,)))
+
+
+@pytest.mark.skipif(find_spec("dolfinx") is None, reason="DOLFINx is not installed")
+@pytest.mark.parametrize("degree", (1, 2, 3), ids=("P1", "P2", "P3"))
+@pytest.mark.parametrize("value_shape", ((), (2,), (2, 2)),
+                         ids=("scalar", "vector", "tensor"))
+def test_irregular_geometry(degree, value_shape):
+    from dolfinx import fem
+    from examples.irregular import create_irregular_mesh
+
+    domain = create_irregular_mesh(COMM)
+    counts = COMM.allgather(domain.topology.index_map(2).size_local)
+    assert sum(counts) == 53
+    if 2 <= COMM.size <= 4:
+        assert len(set(counts)) > 1, f"Expected uneven cell counts, got {counts}"
+    space = fem.functionspace(domain, ("Lagrange", degree, value_shape))
+    reference = fem.Function(space, dtype=np.float64)
+    block_size = space.dofmap.index_map_bs
+    TestForward().exercise(space.dofmap.index_map, reference, block_size)
+    TestReverse().exercise(space.dofmap.index_map, reference, block_size)
