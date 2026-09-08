@@ -1,0 +1,47 @@
+# IRIS-only native foundation; see README.md for the Python overlay.
+# Does not modify mpc-v10. No DOLFINx/PETSc dependencies.
+spack:
+  specs:
+  - python@3.12
+  - py-pip
+  - openmpi@5.0.8 +cuda cuda_arch=70 fabrics=ucx schedulers=slurm
+  - ucx@1.19.0 +cuda cuda_arch=70 +verbs +rdmacm +logging ~gdrcopy
+  view: true
+  concretizer:
+    unify: true
+    reuse: false
+  # Replace inherited package policy, including the old external MPI/UCX.
+  packages::
+    all:
+      require: ['%gcc@13.2.0', 'target=x86_64_v3']
+      providers:
+        mpi: [openmpi]
+        c: [gcc]
+        cxx: [gcc]
+        fortran: [gcc]
+    gcc:
+      buildable: false
+      externals:
+      - spec: gcc@13.2.0 languages=c,c++,fortran
+        prefix: /opt/apps/easybuild/systems/iris/rhel810-20250803/2023b/skylake/software/GCCcore/13.2.0
+        extra_attributes:
+          compilers:
+            c: /opt/apps/easybuild/systems/iris/rhel810-20250803/2023b/skylake/software/GCCcore/13.2.0/bin/gcc
+            cxx: /opt/apps/easybuild/systems/iris/rhel810-20250803/2023b/skylake/software/GCCcore/13.2.0/bin/g++
+            fortran: /opt/apps/easybuild/systems/iris/rhel810-20250803/2023b/skylake/software/GCCcore/13.2.0/bin/gfortran
+    cuda:
+      buildable: false
+      externals:
+      - spec: cuda@12.6.0
+        prefix: /opt/apps/easybuild/systems/iris/rhel810-20250803/2023b/gpu/software/CUDA/12.6.0
+    slurm:
+      # The system scheduler is prebuilt; exempt it from all: compiler/CPU requirements.
+      require: ["@25.11.8"]
+      buildable: false
+      externals:
+      - spec: slurm@25.11.8 sysconfdir=/etc/slurm
+        prefix: /usr
+    openmpi:
+      buildable: true
+    ucx:
+      buildable: true
