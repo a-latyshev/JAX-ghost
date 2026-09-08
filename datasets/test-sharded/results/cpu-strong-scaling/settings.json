@@ -1,0 +1,19 @@
+{
+  "mpirun": "/Users/andrey.latyshev/anaconda3/envs/fenicsx-0.11.0/bin/mpirun",
+  "sizes": [
+    256,
+    1024
+  ],
+  "ranks": [
+    1,
+    2,
+    3,
+    4
+  ],
+  "trials": 3,
+  "iterations": 100,
+  "repeats": 7,
+  "timeout": 300,
+  "local_cpu": true,
+  "output": "datasets/test-sharded/results/cpu-strong-scaling"
+}

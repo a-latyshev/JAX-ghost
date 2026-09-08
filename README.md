@@ -108,3 +108,23 @@ Input arrays are preserved; output ghosts remain unchanged. Use the matrix's
 column layout for `x` and row layout for `y`.
 Run `mpirun -n 4 python examples/matvec.py` for a complete example.
 See [TODO.md](TODO.md) for the operator roadmap.
+
+
+For the experimental native JAX forward backend, initialize distributed JAX
+before device queries, then use `ShardedJAXGhost`:
+
+```python
+jax.distributed.initialize(cluster_detection_method="mpi4py")
+mesh = jax.sharding.Mesh(np.asarray(jax.devices()), ("rank",))
+ghost = ShardedJAXGhost.from_index_map(
+    V.dofmap.index_map, comm, mesh, block_size=V.dofmap.index_map_bs,
+)
+x = ghost.to_sharded(x_local)
+x = jax.jit(ShardedJAXGhost.scatter_forward)(ghost, x)
+x_local = ghost.local_array(x)
+```
+
+Import `numpy as np` and `ShardedJAXGhost` from `jaxghost`. This backend uses
+padded `[owned | ghosts]` shards and native all-to-all; only forward INSERT is
+supported. See [sharded setup and validation](DOCUMENTATION.md#sharded-forward-backend)
+for the example, isolated tests, and macOS launcher workaround.
