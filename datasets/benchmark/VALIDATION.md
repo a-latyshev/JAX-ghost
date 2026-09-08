@@ -28,3 +28,17 @@ artifacts, not portable repository dependencies or representative scaling data.
 GPU execution, GPU transport and the default 103,823-DOF HPC sampling were not
 run. The README provides the commands for those runs. Compatibility with the
 HPC DOLFINx 0.10 installation still needs the documented small-mesh check there.
+
+Timer update: DOLFINx sampling now uses named `dolfinx.common.Timer` instances,
+with explicit start/stop, elapsed seconds and flush. A two-rank n4 export and
+CPU replay passed with 1 warmup, 3 iterations and 2 repeats. The complete MPI
+suite passed again (same pass/skip counts as above). Raw output is in
+`/tmp/jaxghost-timer-validation/` and `/tmp/jaxghost-timer-suite.log`.
+Python syntax checks and `git diff --check` passed after this update.
+
+Shared-clock update: both implementations now use `MPI.Wtime()` and identify
+that clock in their timing JSON. This supersedes the Timer update above.
+Two-rank n4 export/replay passed again (1 warmup, 3 iterations, 2 repeats),
+and the complete required MPI suite passed with the same counts. Syntax and
+whitespace checks passed. Raw results: `/tmp/jaxghost-wtime-validation/`;
+regression log: `/tmp/jaxghost-wtime-suite.log`.

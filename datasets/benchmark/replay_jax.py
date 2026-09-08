@@ -80,7 +80,7 @@ def main():
             raise ValueError('unexpected output device placement')
     if any(k == 'dolfinx' or k.startswith('dolfinx.') for k in sys.modules):
         raise RuntimeError('replay imported DOLFINx')
-    timing = timings(samples, settings['iterations'])
+    timing = dict(timer='MPI.Wtime', **timings(samples, settings['iterations']))
     baseline = meta['timing']['median_seconds_per_matvec']
     report = dict(dataset=str(args.dataset.resolve()), rank_count=COMM.size,
         global_dofs=meta['global_dofs'], backend=args.backend, settings=settings,

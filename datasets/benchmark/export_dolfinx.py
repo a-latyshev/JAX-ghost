@@ -25,7 +25,7 @@ def main():
     if COMM.size not in (1, 2, 3, 4) or min(args.subdivisions, args.iterations, args.repeats) < 1 or args.warmup < 0:
         raise ValueError('use 1–4 ranks, positive sizes/counts, and nonnegative warmup')
     import dolfinx
-    from dolfinx import common, fem, la, mesh
+    from dolfinx import fem, la, mesh
     import ufl
 
     domain = mesh.create_unit_cube(COMM, *([args.subdivisions] * 3), cell_type=mesh.CellType.tetrahedron)
@@ -63,16 +63,13 @@ def main():
     for _ in range(args.warmup):
         A.mult(x, y)
     samples = []
-    for repeat in range(args.repeats):
-        timer = common.Timer(f"benchmark matvec batch {repeat}")
+    for _ in range(args.repeats):
         y.array[:] = 0
         COMM.Barrier()
-        timer.start()
+        start = MPI.Wtime()
         for _ in range(args.iterations):
             A.mult(x, y)
-        timer.stop()
-        elapsed = timer.elapsed().total_seconds()
-        timer.flush()
+        elapsed = MPI.Wtime() - start
         samples.append(COMM.allgather(elapsed))
         check_result(COMM, y.array, data['batch_expected'], nr)
     meta = dict(format_version=1, operator='Poisson stiffness, no boundary conditions',
@@ -80,7 +77,7 @@ def main():
                 global_dofs=int(row_map.size_global), global_cells=6 * args.subdivisions**3,
                 settings=dict(warmup=args.warmup, iterations=args.iterations, repeats=args.repeats),
                 dolfinx_version=dolfinx.__version__, environment=environment(COMM),
-                timing=dict(timer='dolfinx.common.Timer', **timings(samples, args.iterations)))
+                timing=dict(timer='MPI.Wtime', **timings(samples, args.iterations)))
     if meta['global_dofs'] != (args.subdivisions + 1)**3:
         raise ValueError('unexpected global DOF count')
     adapter = StoredMatrix(data, meta, COMM)

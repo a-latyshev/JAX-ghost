@@ -38,6 +38,12 @@ The options mean:
 | `--iterations` | Matvec calls within one timed batch. Divide the batch time by this count to get time per matvec. | 100 calls |
 | `--repeats` | Number of separately timed batches. Report the median of their times per matvec to reduce sensitivity to timing noise. | 10 batches |
 
+Here a **batch** means a sequence of calls timed together, not a collection of
+different input vectors. Reset `y=0` outside timing, start the clock, perform
+`y += A*x` 100 times using the same `A` and `x`, then stop the clock. The final
+owned output is approximately `100*A*x`. Divide elapsed time by 100 to obtain
+the average time per matvec for that batch.
+
 Thus the default sampling measures 10 batches of 100 matvecs, after warmup.
 Reference construction and correctness checks are additional untimed work.
 Keep subdivisions fixed for the entire 1–4-process strong-scaling series.
@@ -105,13 +111,9 @@ replaces that result. The dataset is unchanged.
 Compile and warm up before timing. Each batch resets output outside timing, then
 executes 100 Python-driven calls, accumulating `y += Ax`. Input and coefficients
 remain fixed. JAX blocks on results and effects at batch boundaries. There is no
-per-call barrier. DOLFINx uses a named `dolfinx.common.Timer` for each batch:
-`start()` immediately before the loop, `stop()` immediately after it, and
-`elapsed().total_seconds()` for the duration. `flush()` registers each named
-measurement so it is also available through `dolfinx.common.timing(name)`.
-`resume()` is unnecessary because each batch is one uninterrupted timed region.
-The JAX-only replay uses `MPI.Wtime()` to retain its DOLFINx-free environment.
-Both measure elapsed wall time in seconds.
+per-call barrier. Both DOLFINx and JAX use `MPI.Wtime()` to measure elapsed
+wall time in seconds. JAX completes its pending computation and communication
+before stopping the clock.
 
 Every batch begins with an MPI barrier; rank elapsed times are
 gathered after timing. A sample is `max(rank_seconds)/iterations`; the reported
