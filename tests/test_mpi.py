@@ -1,0 +1,369 @@
+"""Collective pytest cases; run via scripts/run_mpi_tests.py."""
+
+from importlib.util import find_spec
+from types import SimpleNamespace
+import pytest
+
+from mpi4py import MPI
+import jax
+import jax.numpy as jnp
+import numpy as np
+
+from jaxghost import JAXGhost
+
+
+COMM = MPI.COMM_WORLD
+jax.config.update("jax_enable_x64", True)
+
+
+def expand_ids(ids, block_size):
+    return (np.asarray(ids)[:, None] * block_size + np.arange(block_size)).ravel()
+
+
+def synthetic_map(kind):
+    # Unequal owned sizes exercise global-to-local translation.
+    sizes = np.arange(2, COMM.size + 2)
+    offsets = np.concatenate(([0], np.cumsum(sizes)))
+    rank = COMM.rank
+    requests = []
+    if kind == "irregular":
+        for owner in reversed(range(COMM.size)):
+            if owner != rank:
+                requests.append((int(offsets[owner + 1] - 1), owner))
+                if (rank + owner) % 2 == 0 or rank == 0:
+                    requests.append((int(offsets[owner]), owner))
+    elif kind == "one_way" and rank != 0:
+        requests = [(1, 0), (0, 0)]  # Rank 0 has no ghosts, but must send.
+    elif kind == "empty_owner" and rank == 0 and COMM.size > 1:
+        requests = [(int(offsets[1]), 1)]
+    if kind == "empty_owner" and rank == 0:
+        start, stop = 0, 0
+    else:
+        start, stop = int(offsets[rank]), int(offsets[rank + 1])
+    return SimpleNamespace(
+        size_local=stop - start,
+        local_range=(start, stop),
+        ghosts=np.array([g for g, _ in requests], dtype=np.int64),
+        owners=np.array([p for _, p in requests], dtype=np.int32),
+    )
+
+
+class TestForward:
+    def assert_collective_equal(self, actual, expected):
+        error = None
+        try:
+            np.testing.assert_array_equal(actual, expected)
+        except AssertionError as exc:
+            error = f"rank {COMM.rank}: {exc}"
+        errors = COMM.allgather(error)
+        assert not any(errors), "\n".join(e for e in errors if e)
+
+    def exercise(self, index_map, reference=None, block_size=1):
+        n = index_map.size_local * block_size
+        owned_ids = expand_ids(np.arange(*index_map.local_range), block_size)
+        global_ids = np.concatenate((owned_ids, expand_ids(index_map.ghosts, block_size)))
+        with JAXGhost.from_index_map(index_map, COMM, block_size=block_size) as ghost:
+            for compiled in (False, True):
+                forward = jax.jit(ghost.scatter_forward) if compiled else ghost.scatter_forward
+                for dtype in (np.float32, np.float64):
+                    x = jnp.full((len(global_ids),), jnp.nan, dtype=dtype)
+                    for step in range(3):
+                        owned = owned_ids.astype(dtype) * 2 + 10 + 100 * step
+                        x = x.at[:n].set(jnp.asarray(owned))
+                        before = np.asarray(x).copy()
+                        updated = forward(x)
+                        updated.block_until_ready()
+                        jax.effects_barrier()
+                        assert isinstance(updated, jax.Array)
+                        assert updated.devices() == x.devices()
+                        self.assert_collective_equal(
+                            np.asarray(updated), global_ids.astype(dtype) * 2 + 10 + 100 * step
+                        )
+                        self.assert_collective_equal(np.asarray(x), before)
+                        if reference is not None:
+                            reference.x.array[:n] = owned
+                            reference.x.scatter_forward()
+                            self.assert_collective_equal(np.asarray(updated), reference.x.array)
+                        x = updated
+
+    @pytest.mark.parametrize("block_size", (0, -1, 1.5, True, "2"))
+    def test_invalid_block_size(self, block_size):
+        with pytest.raises(ValueError, match="block_size"):
+            JAXGhost.from_index_map(synthetic_map("none"), COMM, block_size=block_size)
+
+    def test_invalid_metadata_is_collective(self):
+        index_map = synthetic_map("none")
+        if COMM.rank == 0:
+            index_map.ghosts = np.array([0], dtype=np.int64)
+            index_map.owners = np.array([COMM.size], dtype=np.int32)
+        with pytest.raises(ValueError, match="ghost owners"):
+            JAXGhost.from_index_map(index_map, COMM)
+
+    @pytest.mark.skipif(COMM.size == 1, reason="requires a remote owner")
+    def test_requested_id_outside_owner_range(self):
+        index_map = synthetic_map("none")
+        if COMM.rank == 0:
+            index_map.ghosts = np.array([999999], dtype=np.int64)
+            index_map.owners = np.array([1], dtype=np.int32)
+        with pytest.raises(ValueError, match="outside"):
+            JAXGhost.from_index_map(index_map, COMM)
+
+    @pytest.mark.parametrize("operation", ("scatter_forward", "scatter_reverse"))
+    def test_shape_dtype_and_close(self, operation):
+        ghost = JAXGhost.from_index_map(synthetic_map("none"), COMM)
+        x = jnp.zeros((ghost.n_owned,), dtype=jnp.float32)
+        with pytest.raises(TypeError, match="JAX array"):
+            getattr(ghost, operation)(np.zeros((ghost.n_owned,), dtype=np.float32))
+        with pytest.raises(ValueError, match="shape"):
+            getattr(ghost, operation)(x[:, None])
+        with pytest.raises(TypeError, match="float32 and float64"):
+            getattr(ghost, operation)(x.astype(jnp.int32))
+        ghost.close()
+        ghost.close()
+        with pytest.raises(RuntimeError, match="closed"):
+            getattr(ghost, operation)(x)
+
+
+def assert_collective_close(actual, expected, *, rtol=0, atol=0):
+    error = None
+    try:
+        np.testing.assert_allclose(actual, expected, rtol=rtol, atol=atol)
+    except AssertionError as exc:
+        error = f"rank {COMM.rank}: {exc}"
+    errors = COMM.allgather(error)
+    assert not any(errors), "\n".join(e for e in errors if e)
+
+
+class TestReverse:
+    def exercise(self, index_map, reference=None, block_size=1):
+        n = index_map.size_local * block_size
+        start, stop = (v * block_size for v in index_map.local_range)
+        owned_ids = np.arange(start, stop)
+        ghost_ids = expand_ids(index_map.ghosts, block_size)
+        with JAXGhost.from_index_map(index_map, COMM, block_size=block_size) as ghost:
+            for compiled in (False, True):
+                reverse = jax.jit(ghost.scatter_reverse) if compiled else ghost.scatter_reverse
+                forward = jax.jit(ghost.scatter_forward) if compiled else ghost.scatter_forward
+                for dtype in (np.float32, np.float64):
+                    initial_owned = (10 + owned_ids * 0.1).astype(dtype)
+                    contributions = ((COMM.rank + 1) * 0.3 + ghost_ids * 0.01).astype(dtype)
+                    expected = np.concatenate((initial_owned, contributions))
+                    x = jnp.asarray(expected)
+                    # Independent, global-ID-based oracle, used only by tests.
+                    requests = COMM.allgather((ghost_ids, contributions))
+                    if reference is not None:
+                        reference.x.array[:] = expected
+                    tolerance = 32 * np.finfo(dtype).eps
+                    for _ in range(2):
+                        before = np.asarray(x).copy()
+                        updated = reverse(x)
+                        updated.block_until_ready()
+                        jax.effects_barrier()
+                        for ids, values in requests:
+                            mask = (ids >= start) & (ids < stop)
+                            np.add.at(expected[:n], ids[mask] - start, values[mask])
+                        assert isinstance(updated, jax.Array)
+                        assert updated.devices() == x.devices()
+                        assert_collective_close(np.asarray(x), before)
+                        assert_collective_close(np.asarray(updated)[n:], contributions)
+                        assert_collective_close(np.asarray(updated), expected,
+                                                rtol=tolerance, atol=tolerance)
+                        if reference is not None:
+                            from dolfinx import la
+                            reference.x.scatter_reverse(la.InsertMode.add)
+                            assert_collective_close(np.asarray(updated), reference.x.array,
+                                                    rtol=tolerance, atol=tolerance)
+                        x = updated
+
+                    # Ghosts contain contributions until an explicit forward refresh.
+                    all_owned = COMM.allgather((owned_ids, expected[:n].copy()))
+                    owner_values = {int(g): v for ids, values in all_owned
+                                    for g, v in zip(ids, values)}
+                    expected[n:] = [owner_values[int(g)] for g in ghost_ids]
+                    refreshed = forward(x)
+                    refreshed.block_until_ready()
+                    jax.effects_barrier()
+                    assert_collective_close(np.asarray(refreshed), expected,
+                                            rtol=tolerance, atol=tolerance)
+                    if reference is not None:
+                        reference.x.scatter_forward()
+                        assert_collective_close(np.asarray(refreshed), reference.x.array,
+                                                rtol=tolerance, atol=tolerance)
+
+
+
+@pytest.mark.parametrize("kind", ("irregular", "one_way", "none", "empty_owner"))
+def test_blocked_synthetic(kind):
+    block_size = 2
+    index_map = synthetic_map(kind)
+    TestForward().exercise(index_map, block_size=block_size)
+    TestReverse().exercise(index_map, block_size=block_size)
+
+
+@pytest.mark.skipif(find_spec("dolfinx") is None, reason="DOLFINx is not installed")
+# Representative layouts, rather than a degree × dimension × shape product.
+@pytest.mark.parametrize(
+    "dimension, degree, value_shape",
+    ((1, 1, ()), (2, 2, ()), (3, 3, ()),
+     (2, 2, (2,)), (3, 1, (3,)),
+     (2, 1, (2, 2)), (2, 2, (2, 2, 2)), (3, 1, (3, 3, 3, 3))),
+    ids=("interval-P1", "square-P2", "cube-P3", "vector2", "vector3",
+         "tensor-order2", "tensor-order3", "tensor-order4"),
+)
+def test_dolfinx_layout(dimension, degree, value_shape):
+    from dolfinx import fem, mesh
+    if dimension == 1:
+        domain = mesh.create_unit_interval(COMM, 8)
+    elif dimension == 2:
+        domain = mesh.create_unit_square(COMM, 4, 4)
+    else:
+        domain = mesh.create_unit_cube(COMM, 2, 2, 2)
+    space = fem.functionspace(domain, ("Lagrange", degree, value_shape))
+    # Full tensors use one consecutive block of components per scalar DoF.
+    # Use the actual DOLFINx space, rather than a vector with the same size.
+    block_size = int(np.prod(value_shape))
+    assert tuple(space.element.value_shape) == value_shape
+    assert space.dofmap.index_map_bs == block_size
+    reference = fem.Function(space, dtype=np.float64)
+    TestForward().exercise(space.dofmap.index_map, reference, block_size)
+    TestReverse().exercise(space.dofmap.index_map, reference, block_size)
+
+
+@pytest.mark.skipif(COMM.size == 1, reason="requires multiple ranks")
+def test_inconsistent_block_size():
+    with pytest.raises(ValueError, match="identical"):
+        JAXGhost.from_index_map(synthetic_map("none"), COMM, block_size=COMM.rank + 1)
+
+
+@pytest.mark.parametrize("operation", ("scatter_forward", "scatter_reverse"))
+def test_blocked_shape(operation):
+    index_map = synthetic_map("none")
+    with JAXGhost.from_index_map(index_map, COMM, block_size=2) as ghost:
+        assert ghost.block_size == 2
+        assert ghost.n_owned == 2 * index_map.size_local
+        with pytest.raises(ValueError, match="shape"):
+            getattr(ghost, operation)(jnp.zeros((index_map.size_local,)))
+
+
+@pytest.mark.skipif(find_spec("dolfinx") is None, reason="DOLFINx is not installed")
+def test_irregular_geometry():
+    degree, value_shape = 2, (2,)
+    from dolfinx import fem
+    from examples.irregular import create_irregular_mesh
+
+    domain = create_irregular_mesh(COMM)
+    counts = COMM.allgather(domain.topology.index_map(2).size_local)
+    assert sum(counts) == 53
+    if 2 <= COMM.size <= 4:
+        assert len(set(counts)) > 1, f"Expected uneven cell counts, got {counts}"
+    space = fem.functionspace(domain, ("Lagrange", degree, value_shape))
+    reference = fem.Function(space, dtype=np.float64)
+    block_size = space.dofmap.index_map_bs
+    TestForward().exercise(space.dofmap.index_map, reference, block_size)
+    TestReverse().exercise(space.dofmap.index_map, reference, block_size)
+
+
+def check_matvec(A, reference=None):
+    from jaxghost import JAXMatrixCSR
+    col_map = A.index_map(1)
+    ids = np.concatenate((np.arange(*col_map.local_range), col_map.ghosts))
+    with JAXMatrixCSR.from_dolfinx(A, COMM) as operator:
+        for compiled in (False, True):
+            mult = jax.jit(operator.mult) if compiled else operator.mult
+            for dtype in ((reference.data.dtype,) if reference is not None else (np.float32, np.float64)):
+                for scale in (1, 2):
+                    values = jnp.asarray(A.data[:operator.nnz_owned] * scale, dtype=dtype)
+                    x = jnp.full((len(ids),), jnp.nan, dtype=dtype)
+                    x = x.at[:operator.n_owned_cols].set(
+                        jnp.asarray(10 + ids[:operator.n_owned_cols], dtype=dtype))
+                    y = jnp.full((operator.n_owned_rows + operator.n_ghost_rows,), 3, dtype=dtype)
+                    before = [np.asarray(a).copy() for a in (values, x, y)]
+                    result = mult(values, x, y)
+                    result.block_until_ready()
+                    jax.effects_barrier()
+                    expected = before[2].copy()
+                    if reference is None:
+                        # Independent row-wise host oracle with global-ID values.
+                        for r in range(operator.n_owned_rows):
+                            lo, hi = A.indptr[r:r + 2]
+                            expected[r] += np.dot(before[0][lo:hi],
+                                                  (10 + ids[A.indices[lo:hi]]).astype(dtype))
+                    else:
+                        from dolfinx import la
+                        xr = la.vector(A.index_map(1), dtype=reference.data.dtype)
+                        yr = la.vector(A.index_map(0), dtype=reference.data.dtype)
+                        xr.array[:] = before[1]
+                        yr.array[:] = before[2]
+                        reference.data[:operator.nnz_owned] = before[0]
+                        reference.mult(xr, yr)
+                        expected[:] = yr.array
+                    tol = 64 * np.finfo(dtype).eps
+                    assert_collective_close(np.asarray(result), expected, rtol=tol, atol=tol)
+                    assert_collective_close(np.asarray(result)[operator.n_owned_rows:],
+                                            before[2][operator.n_owned_rows:])
+                    for a, original in zip((values, x, y), before):
+                        np.testing.assert_array_equal(np.asarray(a), original)
+                    assert result.devices() == x.devices()
+
+
+@pytest.mark.skipif(find_spec('dolfinx') is None, reason='DOLFINx is not installed')
+def test_matrix_dolfinx():
+    from examples.matvec import create_matrix
+    for dtype in (np.float32, np.float64):
+        A = create_matrix(COMM, dtype)
+        # Keep baseline coefficients separate from mutable DOLFINx reference.
+        snapshot = SimpleNamespace(block_size=A.block_size, index_map=A.index_map,
+                                   indptr=A.indptr.copy(), indices=A.indices.copy(), data=A.data.copy())
+        check_matvec(snapshot, A)
+
+
+def rectangular_matrix():
+    columns = synthetic_map('one_way')
+    # Rectangular global matrix, distinct row layout with a ghost output slot.
+    rows = SimpleNamespace(size_local=1,
+                           ghosts=np.array([(COMM.rank + 1) % COMM.size] if COMM.size > 1 else [],
+                                           dtype=np.int64))
+    # Rank zero has an empty row but still supplies remote input values.
+    indices = np.array([] if COMM.rank == 0 else [0, columns.size_local], dtype=np.int32)
+    maps = (rows, columns)
+    return SimpleNamespace(block_size=[1, 1], index_map=lambda i: maps[i],
+                           indptr=np.array([0, len(indices)], dtype=np.int64),
+                           indices=indices, data=np.array([2., -1.])[:len(indices)])
+
+
+def test_matrix_rectangular():
+    check_matvec(rectangular_matrix())
+
+
+def test_matrix_validation():
+    from jaxghost import JAXMatrixCSR
+    A = rectangular_matrix()
+    with JAXMatrixCSR.from_dolfinx(A, COMM) as operator:
+        args = [jnp.zeros((n,), dtype=jnp.float32) for n in
+                (operator.nnz_owned, operator.n_owned_cols + operator.n_ghost_cols,
+                 operator.n_owned_rows + operator.n_ghost_rows)]
+        for i in range(3):
+            bad = args.copy()
+            bad[i] = np.asarray(bad[i])
+            with pytest.raises(TypeError, match='JAX array'):
+                operator.mult(*bad)
+            bad[i] = args[i][:, None]
+            with pytest.raises(ValueError, match='shape'):
+                operator.mult(*bad)
+            bad[i] = args[i].astype(jnp.int32)
+            with pytest.raises(TypeError, match='float32'):
+                operator.mult(*bad)
+        with pytest.raises(TypeError, match='matching'):
+            operator.mult(args[0].astype(jnp.float64), *args[1:])
+    operator.close()
+    with pytest.raises(RuntimeError, match='closed'):
+        operator.mult(*args)
+    if COMM.rank == 0:
+        A.block_size = [2, 2]
+    with pytest.raises(ValueError, match='block sizes'):
+        JAXMatrixCSR.from_dolfinx(A, COMM)
+    A = rectangular_matrix()
+    if COMM.rank == 0:
+        A.indptr[0] = 1
+    with pytest.raises(ValueError, match='CSR'):
+        JAXMatrixCSR.from_dolfinx(A, COMM)

@@ -1,82 +1,110 @@
 # JAX-ghost
 
-Distributed Ghost Updates for JAX used within MPI-parallelized FEM code
+JIT-compatible ghost updates for JAX arrays in MPI-parallel FEM applications.
+DOLFINx supplies ownership metadata; JAX and mpi4jax exchange owner values into
+local ghost entries. Currently supports scalar and blocked vector P1/P2/P3 forward INSERT and reverse ADD updates on 1D, 2D, and 3D
+meshes, with one local JAX device per MPI rank. CPU execution is tested.
 
-## Challenge
+## Current scope
 
-Implement a reusable JAX-compatible abstraction for synchronizing **owned and ghost entries** of vectors distributed across multiple MPI processes and JAX devices.
+1. One JAX device per MPI process. Each MPI rank manages one local JAX device,
+   so the total number of participating devices equals the number of MPI
+   processes.
+2. Numerical data remains on JAX devices. During computation, vectors and
+   communication buffers are JAX arrays. No numerical data is synchronized with
+   DOLFINx data structures; DOLFINx is used only for initialization metadata
+   and, optionally, validation.
+3. DOLFINx defines the distributed layout. Its DoF map and IndexMap provide
+   ownership, ghost indices, and process relationships. Preserving this layout
+   makes the framework compatible with DOLFINx’s distributed indexing
+   conventions and supports future integration with its data structures.
 
-DOLFINx supplies the distributed mesh, degree-of-freedom map, and ownership metadata. JAX owns the numerical arrays used during execution.
+## Installation
 
-Each process stores
+Use an environment with DOLFINx, JAX, mpi4py, and `mpi4jax==0.9.1.post1`, built
+against compatible MPI libraries. From the repository root:
 
-\[
-x_p = [x_p^{\mathrm{owned}} \mid x_p^{\mathrm{ghost}}].
-\]
-
-Every global entry has one owner, while other processes may hold ghost copies required for local computation.
-
-## Core operations
-
-### Forward scatter
-
-```python
-x_local = scatter_forward(x_owned, layout)
+```bash
+python -m pip install --no-deps --no-build-isolation -e .
 ```
 
-Copy current owner values into the corresponding ghost entries:
+See [environment setup and troubleshooting](DOCUMENTATION.md#verified-environment-and-macos-setup)
+for tested versions, ARM builds, and macOS MPI transport settings.
 
-\[
-x_{p,i}^{\mathrm{ghost}} = x_{\operatorname{owner}(i),i}^{\mathrm{owned}}.
-\]
+## Usage
 
-### Reverse scatter
+Run an example:
 
-```python
-x_owned = scatter_reverse(x_local, layout, op="sum")
+```bash
+export JAX_PLATFORMS=cpu
+export JAX_NUM_CPU_DEVICES=1
+mpirun -n 2 python examples/interval.py
+mpirun -n 4 python examples/square.py --degree 2
+mpirun -n 4 python examples/cube.py --degree 3
+mpirun -n 4 python examples/irregular.py --degree 2
 ```
 
-Accumulate ghost contributions back into their owners:
+The interval, square, and cube examples accept `--degree 1`, `2`, or `3` (default: `1`).
 
-\[
-x_i^{\mathrm{owned}} \mathrel{+}= \sum_{p:\,i\in G_p} x_{p,i}^{\mathrm{ghost}}.
-\]
-
-## DOLFINx and JAX responsibilities
-
-DOLFINx provides:
-
-- distributed mesh and function space;
-- cell-to-DoF map;
-- `IndexMap` ownership and ghost metadata;
-- local sparse matrix structure for the demonstration.
-
-JAX provides:
-
-- persistent device arrays for vector and matrix data;
-- packing and unpacking kernels;
-- local sparse matrix-vector multiplication;
-- JIT compilation and automatic differentiation.
-
-Initial copies of static metadata and matrix data to JAX devices are acceptable. Repeated DOLFINx/PETSc-to-JAX synchronization and shared-memory interoperability are outside the hackathon scope.
-
-## Minimum implementation
-
-Build a static communication layout from a DOLFINx `IndexMap`, containing:
-
-- number of locally owned entries;
-- global indices and owners of ghost entries;
-- source and destination ranks;
-- local send and receive indices;
-- packed message sizes and offsets.
-
-Use `mpi4jax`, native JAX communication, or another suitable backend. Packing, communication, unpacking, and local numerical operations should work with `jax.jit` wherever possible.
-
-A target interface is:
+In your application, create a plan from a DOLFINx function space `V` and
+pass a JAX array containing `[owned | ghosts]`:
 
 ```python
-scatterer = JAXScatterer.from_index_map(V.dofmap.index_map)
-x_local = scatterer.forward(x_owned)
-x_owned = scatterer.reverse_add(x_local)
-y_owned = distributed_spmv(A_local, x_owned, scatterer)
+import jax
+from jaxghost import JAXGhost
+
+with JAXGhost.from_index_map(
+    V.dofmap.index_map, comm=V.mesh.comm,
+    block_size=V.dofmap.index_map_bs,
+) as ghost:
+    forward = jax.jit(ghost.scatter_forward)
+    x = forward(x)  # Preserve owned values and refresh ghosts.
 ```
+
+For vector-valued spaces, pass `V.dofmap.index_map_bs` as above. Keep `x` flat,
+with consecutive components for each DoF; `ghost.n_owned` and `ghost.n_ghost`
+count scalar entries. For example, create a two-component P2 space with
+`V = fem.functionspace(domain, ("Lagrange", 2, (2,)))`.
+
+For assembly contributions, accumulate ghosts back into owners:
+
+```python
+# Within the same ghost context:
+reverse = jax.jit(ghost.scatter_reverse)
+x = reverse(x)  # Return updated owned values and unchanged ghosts.
+```
+
+Run `mpirun -n 4 python examples/reverse.py` for a DOLFINx comparison.
+Reverse ADD does not clear or refresh ghosts; repeat calls add them again.
+
+All ranks must call the update in the same sequence, using the same dtype.
+
+Run the pytest suite on 1–4 MPI ranks with timeout protection:
+
+```bash
+python -m pip install pytest  # If not already installed.
+python scripts/run_mpi_tests.py
+mpirun -n 3 python -m pytest tests
+```
+
+See [DOCUMENTATION.md](DOCUMENTATION.md) for the data-flow diagram, implementation
+details, validation, limitations, and project goals. Contributor guidance is in
+[AGENTS.md](AGENTS.md).
+
+
+Scalar CSR matvec follows DOLFINx's owned-row `y += Ax` semantics:
+
+```python
+import jax.numpy as jnp
+from jaxghost import JAXMatrixCSR
+
+# A is a scalar DOLFINx matrix with numerical assembly finalized.
+with JAXMatrixCSR.from_dolfinx(A, comm) as operator:
+    values = jnp.array(A.data[:operator.nnz_owned], copy=True)
+    y = jax.jit(operator.mult)(values, x, y)
+```
+
+Input arrays are preserved; output ghosts remain unchanged. Use the matrix's
+column layout for `x` and row layout for `y`.
+Run `mpirun -n 4 python examples/matvec.py` for a complete example.
+See [TODO.md](TODO.md) for the operator roadmap.
