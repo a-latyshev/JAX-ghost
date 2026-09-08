@@ -300,3 +300,11 @@ warnings remained after successful computation.
 Logs and the reproduction script are retained in
 `$HOME/jaxghost-transport-evidence-20260908/` (`jaxghost-ucx-cache-on.log`,
 `jaxghost-ucx-cache-off.log`, and `probe-ucx.sh`).
+
+
+Transport follow-up (iris-173, 2026-09-08): GDB confirmed that the working
+UCX configuration internally stages this diagnostic's small ghost messages
+through host buffers (24 CUDA pack copies and 24 unpack copies, no CUDA IPC
+copy breakpoint hits). All four ranks passed and exited normally. This keeps
+`MPI4JAX_USE_CUDA_MPI=1`; larger-message and multi-node routes remain untested.
+See [the measured payload path](transport-investigation.md#actual-payload-path-with-the-working-ucx-configuration).
