@@ -25,6 +25,10 @@ spack:
       - spec: gcc@13.2.0 languages=c,c++,fortran
         prefix: /opt/apps/easybuild/systems/iris/rhel810-20250803/2023b/skylake/software/GCCcore/13.2.0
         extra_attributes:
+          # GCCcore needs the matching assembler/linker, including DWARF 5 support.
+          environment:
+            prepend_path:
+              PATH: /opt/apps/easybuild/systems/iris/rhel810-20250803/2023b/skylake/software/binutils/2.40-GCCcore-13.2.0/bin
           compilers:
             c: /opt/apps/easybuild/systems/iris/rhel810-20250803/2023b/skylake/software/GCCcore/13.2.0/bin/gcc
             cxx: /opt/apps/easybuild/systems/iris/rhel810-20250803/2023b/skylake/software/GCCcore/13.2.0/bin/g++

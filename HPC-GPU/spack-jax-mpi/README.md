@@ -1,7 +1,8 @@
 # Minimal IRIS GPU communication environment
 
 `spack.yaml` builds UCX 1.19.0 and OpenMPI 5.0.8 from source, using the
-site CUDA 12.6 toolkit and GCC 13.2 compiler by explicit paths. It overrides
+site CUDA 12.6 toolkit, GCC 13.2 compiler, and matching binutils 2.40 by
+explicit paths. It overrides
 inherited external MPI/UCX policies. The versions are available in this
 checkout's Spack recipes; this is a candidate stack, not a proven direct-GPU
 transport configuration. `cuda_arch=70` targets IRIS V100 GPUs.
@@ -20,6 +21,30 @@ Run compilation on a site-approved build/compute allocation and adjust `-j`
 to its allocated CPUs. Inspect the concrete DAG before installation: OpenMPI
 and UCX must be source builds with CUDA enabled. Keep the resulting lockfile.
 The site paths and Slurm version are IRIS-specific; adjust for other clusters.
+
+## Recovering from the assembler failure
+
+`as: unrecognized option '--gdwarf-5'` means the assembler selected by GCC
+cannot handle its debug-information option. The external GCC configuration
+now prepends the matching site binutils directory inside Spack builds.
+
+A named environment has its own copy of `spack.yaml`; editing this repository's
+file alone does not update an existing `jax-mpi-gpu` environment. After applying
+the same compiler environment setting to that copy, run on an IRIS compute
+allocation (the site Skylake binaries may fail on older login-node CPUs):
+
+```bash
+spack env activate jax-mpi-gpu
+spack concretize --force
+spack install -j 4
+spack build-env readline -- sh -c 'command -v as; as --version'
+```
+
+The optional assembler check requires readline dependencies to be installed;
+run it after installation and confirm the configured binutils 2.40 executable.
+Re-concretization updates compiler metadata in the
+lockfile and may change hashes; Spack reuses installed packages where hashes
+still match. Full installation and GPU transport validation remain necessary.
 
 ## Python overlay
 
