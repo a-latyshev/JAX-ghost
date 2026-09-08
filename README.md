@@ -90,3 +90,21 @@ mpirun -n 3 python -m pytest tests
 See [DOCUMENTATION.md](DOCUMENTATION.md) for the data-flow diagram, implementation
 details, validation, limitations, and project goals. Contributor guidance is in
 [AGENTS.md](AGENTS.md).
+
+
+Scalar CSR matvec follows DOLFINx's owned-row `y += Ax` semantics:
+
+```python
+import jax.numpy as jnp
+from jaxghost import JAXMatrixCSR
+
+# A is a scalar DOLFINx matrix with numerical assembly finalized.
+with JAXMatrixCSR.from_dolfinx(A, comm) as operator:
+    values = jnp.array(A.data[:operator.nnz_owned], copy=True)
+    y = jax.jit(operator.mult)(values, x, y)
+```
+
+Input arrays are preserved; output ghosts remain unchanged. Use the matrix's
+column layout for `x` and row layout for `y`.
+Run `mpirun -n 4 python examples/matvec.py` for a complete example.
+See [TODO.md](TODO.md) for the operator roadmap.

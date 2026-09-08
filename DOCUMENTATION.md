@@ -368,7 +368,7 @@ documented in [MPICH issue 6856](https://github.com/pmodels/mpich/issues/6856).
 - Treat the plan as immutable. Rebuild it if the partition or ghost layout
   changes. Concurrent updates from multiple Python threads are unsupported.
 
-Reverse INSERT, differentiation through communication, sparse matvec, GPU
+Reverse INSERT, differentiation through communication, GPU
 validation, and communication/computation overlap are future work. The forward
 operation alone does not establish correct distributed automatic differentiation.
 
@@ -383,8 +383,8 @@ and [installation guidance](https://mpi4jax.readthedocs.io/en/stable/installatio
 ## Project goals
 
 The following sections describe the broader project goals and target interfaces.
-Forward INSERT and reverse ADD are implemented. Distributed matvec and
-automatic differentiation remain future work; the interfaces below are schematic.
+Forward INSERT, reverse ADD and scalar distributed CSR matvec are implemented.
+Automatic differentiation remains future work; the interfaces below are schematic.
 
 Implement a reusable JAX-compatible abstraction for synchronizing **owned and ghost entries** of vectors distributed across multiple MPI processes and JAX devices.
 
@@ -515,3 +515,48 @@ rank. Tests additionally check reverse ADD and forward refresh for a P2 vector
 field, eager/JIT and float32/float64, using the
 same DOLFINx and global-ID comparisons as the regular-mesh tests. Cell imbalance
 does not imply a particular DoF imbalance or geometric ordering of ranks.
+
+
+## Scalar distributed CSR matvec
+
+`JAXMatrixCSR.from_dolfinx(A, comm)` reads static CSR structure and both
+IndexMaps. DOLFINx creates MatrixCSR from finalized sparsity; numerical assembly
+must also be completed (`A.scatter_reverse()`) before coefficients are copied.
+There is no exposed numerical-finalization flag to check. The operator never
+reads `A.data` itself and does not retain A. Only owned-row CSR entries are kept.
+`nnz_owned`, `n_owned_rows`, `n_ghost_rows`, `n_owned_cols` and `n_ghost_cols`
+describe the operand lengths. Scalar matrix block sizes `[1, 1]` are required.
+
+```mermaid
+flowchart TD
+    A["Static CSR and matrix row/column IndexMaps"] --> B["Column ghost plan"]
+    X["JAX x: column owned and ghost entries"] --> C["Forward INSERT"]
+    B --> C
+    C --> D["JAX sparse CSR matvec on owned rows"]
+    V["Dynamic JAX values: owned-row nonzeros"] --> D
+    D --> E["Add to owned y; preserve y ghosts"]
+```
+
+`mult(values, x, y)` is JIT compatible. All three arrays must be flat device
+arrays of matching float32/float64 dtype, with lengths `nnz_owned`,
+`n_owned_cols + n_ghost_cols`, and `n_owned_rows + n_ghost_rows` respectively.
+Change coefficients by passing new values with the same sparsity and ordering.
+The column IndexMap can differ from the function-space map after sparsity
+finalization. No reverse scatter or output ghost refresh is required for this
+owned-row product. All input arrays, including stale input ghosts, are preserved.
+
+DOLFINx's C++ `MatrixCSR::mult` starts forward communication, computes the
+owned-column contribution, completes communication, and adds remote-column
+contributions. This baseline uses the existing complete forward scatter then
+JAX's experimental sparse CSR matvec; it does not expose communication overlap.
+It returns a new full local y rather than mutating x or y. Zero-nonzero ranks
+still execute any required input sends. Context teardown waits for MPI effects;
+discard compiled functions before using a closed operator. Calls must follow
+the same rank sequence and dtype; runtime validation is local, so inconsistent
+calls across ranks can hang. No GPU performance or derivative support is claimed.
+
+The example uses a P1 square mass-plus-diffusion matrix and one compiled update.
+Three essential tests cover a DOLFINx reference, rectangular/asymmetric synthetic
+layout with an empty row, and validation/lifetime checks. Numerical checks include
+eager/JIT, both precisions, changed values, nonzero initial y, stale ghosts,
+input preservation and device placement. Benchmarks and extensions are in TODO.md.
