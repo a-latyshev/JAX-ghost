@@ -261,3 +261,109 @@ def test_irregular_geometry():
     block_size = space.dofmap.index_map_bs
     TestForward().exercise(space.dofmap.index_map, reference, block_size)
     TestReverse().exercise(space.dofmap.index_map, reference, block_size)
+
+
+def check_matvec(A, reference=None):
+    from jaxghost import JAXMatrixCSR
+    col_map = A.index_map(1)
+    ids = np.concatenate((np.arange(*col_map.local_range), col_map.ghosts))
+    with JAXMatrixCSR.from_dolfinx(A, COMM) as operator:
+        for compiled in (False, True):
+            mult = jax.jit(operator.mult) if compiled else operator.mult
+            for dtype in ((reference.data.dtype,) if reference is not None else (np.float32, np.float64)):
+                for scale in (1, 2):
+                    values = jnp.asarray(A.data[:operator.nnz_owned] * scale, dtype=dtype)
+                    x = jnp.full((len(ids),), jnp.nan, dtype=dtype)
+                    x = x.at[:operator.n_owned_cols].set(
+                        jnp.asarray(10 + ids[:operator.n_owned_cols], dtype=dtype))
+                    y = jnp.full((operator.n_owned_rows + operator.n_ghost_rows,), 3, dtype=dtype)
+                    before = [np.asarray(a).copy() for a in (values, x, y)]
+                    result = mult(values, x, y)
+                    result.block_until_ready()
+                    jax.effects_barrier()
+                    expected = before[2].copy()
+                    if reference is None:
+                        # Independent row-wise host oracle with global-ID values.
+                        for r in range(operator.n_owned_rows):
+                            lo, hi = A.indptr[r:r + 2]
+                            expected[r] += np.dot(before[0][lo:hi],
+                                                  (10 + ids[A.indices[lo:hi]]).astype(dtype))
+                    else:
+                        from dolfinx import la
+                        xr = la.vector(A.index_map(1), dtype=reference.data.dtype)
+                        yr = la.vector(A.index_map(0), dtype=reference.data.dtype)
+                        xr.array[:] = before[1]
+                        yr.array[:] = before[2]
+                        reference.data[:operator.nnz_owned] = before[0]
+                        reference.mult(xr, yr)
+                        expected[:] = yr.array
+                    tol = 64 * np.finfo(dtype).eps
+                    assert_collective_close(np.asarray(result), expected, rtol=tol, atol=tol)
+                    assert_collective_close(np.asarray(result)[operator.n_owned_rows:],
+                                            before[2][operator.n_owned_rows:])
+                    for a, original in zip((values, x, y), before):
+                        np.testing.assert_array_equal(np.asarray(a), original)
+                    assert result.devices() == x.devices()
+
+
+@pytest.mark.skipif(find_spec('dolfinx') is None, reason='DOLFINx is not installed')
+def test_matrix_dolfinx():
+    from examples.matvec import create_matrix
+    for dtype in (np.float32, np.float64):
+        A = create_matrix(COMM, dtype)
+        # Keep baseline coefficients separate from mutable DOLFINx reference.
+        snapshot = SimpleNamespace(block_size=A.block_size, index_map=A.index_map,
+                                   indptr=A.indptr.copy(), indices=A.indices.copy(), data=A.data.copy())
+        check_matvec(snapshot, A)
+
+
+def rectangular_matrix():
+    columns = synthetic_map('one_way')
+    # Rectangular global matrix, distinct row layout with a ghost output slot.
+    rows = SimpleNamespace(size_local=1,
+                           ghosts=np.array([(COMM.rank + 1) % COMM.size] if COMM.size > 1 else [],
+                                           dtype=np.int64))
+    # Rank zero has an empty row but still supplies remote input values.
+    indices = np.array([] if COMM.rank == 0 else [0, columns.size_local], dtype=np.int32)
+    maps = (rows, columns)
+    return SimpleNamespace(block_size=[1, 1], index_map=lambda i: maps[i],
+                           indptr=np.array([0, len(indices)], dtype=np.int64),
+                           indices=indices, data=np.array([2., -1.])[:len(indices)])
+
+
+def test_matrix_rectangular():
+    check_matvec(rectangular_matrix())
+
+
+def test_matrix_validation():
+    from jaxghost import JAXMatrixCSR
+    A = rectangular_matrix()
+    with JAXMatrixCSR.from_dolfinx(A, COMM) as operator:
+        args = [jnp.zeros((n,), dtype=jnp.float32) for n in
+                (operator.nnz_owned, operator.n_owned_cols + operator.n_ghost_cols,
+                 operator.n_owned_rows + operator.n_ghost_rows)]
+        for i in range(3):
+            bad = args.copy()
+            bad[i] = np.asarray(bad[i])
+            with pytest.raises(TypeError, match='JAX array'):
+                operator.mult(*bad)
+            bad[i] = args[i][:, None]
+            with pytest.raises(ValueError, match='shape'):
+                operator.mult(*bad)
+            bad[i] = args[i].astype(jnp.int32)
+            with pytest.raises(TypeError, match='float32'):
+                operator.mult(*bad)
+        with pytest.raises(TypeError, match='matching'):
+            operator.mult(args[0].astype(jnp.float64), *args[1:])
+    operator.close()
+    with pytest.raises(RuntimeError, match='closed'):
+        operator.mult(*args)
+    if COMM.rank == 0:
+        A.block_size = [2, 2]
+    with pytest.raises(ValueError, match='block sizes'):
+        JAXMatrixCSR.from_dolfinx(A, COMM)
+    A = rectangular_matrix()
+    if COMM.rank == 0:
+        A.indptr[0] = 1
+    with pytest.raises(ValueError, match='CSR'):
+        JAXMatrixCSR.from_dolfinx(A, COMM)
