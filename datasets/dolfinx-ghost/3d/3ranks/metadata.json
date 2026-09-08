@@ -1,0 +1,61 @@
+{
+  "format_version": 1,
+  "dimension": 3,
+  "domain": "unit interval/square/cube",
+  "cell_type": "tetrahedron",
+  "subdivisions": [
+    12,
+    12,
+    12
+  ],
+  "global_cells": 10368,
+  "global_dofs": 2197,
+  "rank_count": 3,
+  "block_size": 1,
+  "cases": 2,
+  "function_space": "scalar continuous Lagrange P1",
+  "value_dtype": "float64",
+  "global_index_dtype": "int64",
+  "owner_rank_dtype": "int32",
+  "layout": "[owned | ghosts]",
+  "ranks": [
+    {
+      "rank": 0,
+      "owned": 742,
+      "ghosts": 234,
+      "owned_range": [
+        0,
+        742
+      ],
+      "owned_cells": 3436
+    },
+    {
+      "rank": 1,
+      "owned": 726,
+      "ghosts": 266,
+      "owned_range": [
+        742,
+        1468
+      ],
+      "owned_cells": 3476
+    },
+    {
+      "rank": 2,
+      "owned": 729,
+      "ghosts": 212,
+      "owned_range": [
+        1468,
+        2197
+      ],
+      "owned_cells": 3456
+    }
+  ],
+  "versions": {
+    "dolfinx": "0.10.0.post4",
+    "numpy": "2.3.4",
+    "mpi4py": "4.1.1",
+    "python": "3.12.12"
+  },
+  "mpi_library": "Open MPI v4.1.6, package: Open MPI sw_builder@aion-0342 Distribution, ident: 4.1.6, repo rev: v4.1.6, Sep 30, 2023\u0000",
+  "validation": "ownership, DOLFINx references, preserved entries, NPZ roundtrip passed"
+}

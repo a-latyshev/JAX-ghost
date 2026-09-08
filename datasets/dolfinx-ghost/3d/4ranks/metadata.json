@@ -1,0 +1,71 @@
+{
+  "format_version": 1,
+  "dimension": 3,
+  "domain": "unit interval/square/cube",
+  "cell_type": "tetrahedron",
+  "subdivisions": [
+    12,
+    12,
+    12
+  ],
+  "global_cells": 10368,
+  "global_dofs": 2197,
+  "rank_count": 4,
+  "block_size": 1,
+  "cases": 2,
+  "function_space": "scalar continuous Lagrange P1",
+  "value_dtype": "float64",
+  "global_index_dtype": "int64",
+  "owner_rank_dtype": "int32",
+  "layout": "[owned | ghosts]",
+  "ranks": [
+    {
+      "rank": 0,
+      "owned": 570,
+      "ghosts": 174,
+      "owned_range": [
+        0,
+        570
+      ],
+      "owned_cells": 2612
+    },
+    {
+      "rank": 1,
+      "owned": 539,
+      "ghosts": 236,
+      "owned_range": [
+        570,
+        1109
+      ],
+      "owned_cells": 2612
+    },
+    {
+      "rank": 2,
+      "owned": 540,
+      "ghosts": 232,
+      "owned_range": [
+        1109,
+        1649
+      ],
+      "owned_cells": 2611
+    },
+    {
+      "rank": 3,
+      "owned": 548,
+      "ghosts": 177,
+      "owned_range": [
+        1649,
+        2197
+      ],
+      "owned_cells": 2533
+    }
+  ],
+  "versions": {
+    "dolfinx": "0.10.0.post4",
+    "numpy": "2.3.4",
+    "mpi4py": "4.1.1",
+    "python": "3.12.12"
+  },
+  "mpi_library": "Open MPI v4.1.6, package: Open MPI sw_builder@aion-0342 Distribution, ident: 4.1.6, repo rev: v4.1.6, Sep 30, 2023\u0000",
+  "validation": "ownership, DOLFINx references, preserved entries, NPZ roundtrip passed"
+}

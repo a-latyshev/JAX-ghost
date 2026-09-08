@@ -1,0 +1,40 @@
+{
+  "format_version": 1,
+  "dimension": 2,
+  "domain": "unit interval/square/cube",
+  "cell_type": "triangle",
+  "subdivisions": [
+    70,
+    70
+  ],
+  "global_cells": 9800,
+  "global_dofs": 5041,
+  "rank_count": 1,
+  "block_size": 1,
+  "cases": 2,
+  "function_space": "scalar continuous Lagrange P1",
+  "value_dtype": "float64",
+  "global_index_dtype": "int64",
+  "owner_rank_dtype": "int32",
+  "layout": "[owned | ghosts]",
+  "ranks": [
+    {
+      "rank": 0,
+      "owned": 5041,
+      "ghosts": 0,
+      "owned_range": [
+        0,
+        5041
+      ],
+      "owned_cells": 9800
+    }
+  ],
+  "versions": {
+    "dolfinx": "0.10.0.post4",
+    "numpy": "2.3.4",
+    "mpi4py": "4.1.1",
+    "python": "3.12.12"
+  },
+  "mpi_library": "Open MPI v4.1.6, package: Open MPI sw_builder@aion-0342 Distribution, ident: 4.1.6, repo rev: v4.1.6, Sep 30, 2023\u0000",
+  "validation": "ownership, DOLFINx references, preserved entries, NPZ roundtrip passed"
+}
