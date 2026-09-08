@@ -2,5 +2,6 @@
 
 from .jaxghost import JAXGhost
 from .matrix import JAXMatrixCSR
+from .sharded import ShardedJAXGhost
 
-__all__ = ["JAXGhost", "JAXMatrixCSR"]
+__all__ = ["JAXGhost", "JAXMatrixCSR", "ShardedJAXGhost"]

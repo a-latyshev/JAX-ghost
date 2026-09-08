@@ -560,3 +560,84 @@ Three essential tests cover a DOLFINx reference, rectangular/asymmetric syntheti
 layout with an empty row, and validation/lifetime checks. Numerical checks include
 eager/JIT, both precisions, changed values, nonzero initial y, stale ghosts,
 input preservation and device placement. Benchmarks and extensions are in TODO.md.
+
+
+## Sharded forward backend
+
+`ShardedJAXGhost` implements forward INSERT with `jax.shard_map` and native
+`jax.lax.all_to_all`. It shares the one-time host IndexMap request builder with
+JAXGhost, preserving DOLFINx ghost ordering and block-component expansion.
+mpi4py communicates metadata only. The sharded numerical path does not call
+mpi4jax or duplicate an MPI communicator, although mpi4jax remains an installed
+package dependency for the existing backend. No `close()` is needed on a sharded
+plan; the application owns JAX distributed initialization and shutdown.
+
+The global numerical array has shape `(nranks, padded_length)` and
+`NamedSharding(mesh, PartitionSpec("rank", None))`. Each device stores one row:
+`[owned | ghosts | padding]`, where `padded_length` is at least one and otherwise
+the maximum local scalar length. This is a padded collection of local buffers,
+not a global owned-only vector: reductions must exclude ghosts and padding.
+`n_owned` and `n_ghost` report this process's unpadded scalar counts.
+`to_sharded(local)` pads a JAX device array and constructs its global descriptor
+without gathering its numerical data. `local_array(global_array)` returns the
+unpadded addressable JAX shard. Both helpers run outside JIT.
+
+The plan is an immutable pytree. Its index tables and masks are sharded dynamic
+leaves; static mesh, block size, global counts and padded dimensions are the same
+on every process. Compile with
+`jax.jit(ShardedJAXGhost.scatter_forward)(ghost, x)` so those leaves are operands,
+not different constants embedded in each process's program. Each device runs
+the same gather/all-to-all/indexed-SET program, using only its own index-table
+shards. Invalid sends are zero; invalid receive positions use an out-of-bounds
+drop sentinel. Forward preserves inputs, owned entries, and padding. Arrays
+must use matching float32/float64 dtypes across ranks. Runtime shape/dtype checks
+are local; the caller must execute matching operations on every process.
+
+Each local communication buffer has shape `(nranks, max_message_length)`, with
+message length at least one. This deliberately simple baseline pads missing
+peers and unequal messages. It does not claim lower communication cost than the
+existing peer-based backend. Reverse scatter, AD, sparse matvec integration,
+GPU validation and neighbor-permutation schedules are deferred.
+
+### Launch and test
+
+Initialize distributed JAX before any device query and construct a 1D mesh named
+`rank`. Require one local device per process, all participating JAX devices in
+MPI rank order, and a communicator spanning all JAX processes (no subcommunicators).
+All metadata construction is collective. Supported setup is tested with JAX and
+jaxlib 0.10.2; the rest of the environment matches the versions listed above.
+
+```bash
+JAX_PLATFORMS=cpu JAX_NUM_CPU_DEVICES=1 mpirun -n 2 python examples/sharded.py
+python scripts/run_sharding_tests.py
+python scripts/run_sharding_tests.py --example --ranks 2 4
+```
+
+The separate runner initializes JAX before importing tests. Its seven focused
+cases cover native all-to-all, unsorted/multiple-neighbor layouts, asymmetric
+zero-ghost senders, empty owned and fully empty layouts, an irregular DOLFINx P2
+vector field, and validation. They exercise eager/JIT, float32/float64, changed
+owned values, input and padding preservation. The file is deliberately named
+`sharding_checks.py` so ordinary pytest discovery does not initialize distributed
+JAX inside the existing mpi4jax test process. The runner defaults to CPU, 1–4
+ranks and a 120-second timeout per job, killing the job's process group on timeout.
+
+### macOS single-host workaround
+
+On this machine, default coordinator discovery timed out; using a loopback
+coordinator revealed a second issue: Gloo could not resolve the local hostname.
+The optional `--local-cpu` launcher mode explicitly binds both services to
+127.0.0.1, and removes proxy settings only from launched child environments.
+It changes no system network configuration. It uses private JAX CPU-client
+hooks verified on 0.10.2 and may need adjustment after a JAX upgrade. This mode
+is for single-host CPU tests only; never use loopback for a multi-host job.
+The normal library and launch path do not use these hooks.
+
+```bash
+FI_PROVIDER=tcp FI_TCP_IFACE=en0 python scripts/run_sharding_tests.py --local-cpu
+FI_PROVIDER=tcp FI_TCP_IFACE=en0 python scripts/run_sharding_tests.py --local-cpu --example --ranks 2 4
+```
+
+FI_PROVIDER/FI_TCP_IFACE configure mpi4py's MPICH setup transport, not JAX's
+native all-to-all. Distributed tests must pass before claiming support on a new
+machine; single-process multiple-device tests are not equivalent evidence.
