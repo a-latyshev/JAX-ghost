@@ -1,163 +1,211 @@
-# JAX and mpi4jax on IRIS
+# JAX + mpi4jax on HPC
 
-These instructions add pip packages in a virtual environment over the existing
-Spack `mpc-v10` environment, without rebuilding or modifying its packages.
+This guide uses Slurm and NVIDIA GPUs, with one MPI process per GPU. Adapt the
+partition, account, CPU count, environment activation, and launcher to your
+cluster. Start on one node before testing multiple nodes.
 
-## Allocate an interactive GPU session
+## Allocate and verify MPI
 
-Run from the login node:
+Activate your site's Python/compiler/MPI stack (for example, a Spack environment).
+Reserve CPU tasks as well as GPUs; `-N` counts nodes and `-n` counts processes.
+
+```bash
+# Replace the partition and resource counts with your site's values.
+salloc -p your_gpu_partition -N 1 -n 4 -c 4 --gpus-per-task=1 -t 01:00:00
+```
+
+Use the site's compute-node shell or job steps. For OpenMPI with Slurm PMIx:
+
+```bash
+srun --mpi=list
+srun --mpi=pmix -n 4 -c 4 python -c \
+    'from mpi4py import MPI; print(MPI.COMM_WORLD.rank, MPI.COMM_WORLD.size, MPI.Get_library_version(), flush=True)'
+```
+
+Expect ranks 0–3, each reporting size 4. If this fails, resolve the site's MPI
+launcher/plugin configuration before testing JAX. Other schedulers/MPI stacks
+may require a different launcher. Shared filesystems do not guarantee that
+CPU-specific binaries or external library paths work on another cluster.
+
+## Install a pip overlay
+
+With the base stack activated and NumPy, SciPy, and mpi4py already available:
+
+```bash
+python -m venv --system-site-packages "$HOME/venvs/hpc-jax"
+source "$HOME/venvs/hpc-jax/bin/activate"
+
+# Preserve the base numerical/MPI packages.
+python - <<'PY' > "$VIRTUAL_ENV/constraints.txt"
+from importlib.metadata import version
+for name in ("numpy", "scipy", "mpi4py"):
+    print(f"{name}=={version(name)}")
+PY
+
+python -m pip install --upgrade pip setuptools wheel nanobind
+python -m pip install -c "$VIRTUAL_ENV/constraints.txt" 'jax[cuda12]'
+MPI4JAX_BUILD_MPICC="$(command -v mpicc)" \
+python -m pip install --no-build-isolation --no-cache-dir \
+    -c "$VIRTUAL_ENV/constraints.txt" 'jax[cuda12]' mpi4jax
+python -m pip check
+```
+
+Choose JAX wheels for your GPU and driver: CUDA 12 is needed for V100s; CUDA 13
+JAX wheels do not support them. `nvidia-smi` reports driver capability, not the
+Python CUDA toolkit. Install where downloads and compilation are permitted.
+Activate the same base stack **before** the overlay in every job.
+
+### Spack/venv CUDA-discovery fix: mpi4jax 0.9.1.post1
+
+This release searches for NVIDIA wheels beside mpi4py. With mpi4py in Spack and
+CUDA in a venv, it can print `CUDA path not found` and install only CPU support.
+`--no-build-isolation` alone does not fix that layout.
+
+Apply the [CUDA 12 discovery patch](mpi4jax-0.9.1.post1-cuda12-discovery.patch)
+to a freshly extracted **0.9.1.post1** source distribution. From that directory:
+
+```bash
+CUDA_PATCH=/path/to/JAX-ghost/HPC-GPU/mpi4jax-0.9.1.post1-cuda12-discovery.patch
+patch --dry-run -p1 < "$CUDA_PATCH"
+# Continue only if the dry run succeeds.
+patch -p1 < "$CUDA_PATCH"
+
+set -o pipefail
+MPI4JAX_BUILD_MPICC="$(command -v mpicc)" \
+python -m pip install --force-reinstall --no-deps --no-build-isolation -v . \
+    2>&1 | tee "$VIRTUAL_ENV/mpi4jax-build-fixed.log"
+```
+
+Confirm the build includes `mpi_xla_bridge_cuda`. This patch is specific to
+that release and CUDA 12 wheels; retain it with your environment records.
+Do not guess a `CUDA_ROOT`: use it only for an actual compatible local toolkit.
+
+## Test GPU communication
+
+From `HPC-GPU`, run the adjacent four-rank diagnostic:
+
+```bash
+# Explicitly use transfers staged through CPU memory initially.
+export MPI4JAX_USE_CUDA_MPI=0
+srun --mpi=pmix -n 4 -c 4 --gpus-per-task=1 --cpu-bind=cores \
+    "$VIRTUAL_ENV/bin/python" -u check-mpi4jax.py
+echo "srun exit status: $?"
+```
+
+Expect `GPU sum=10.0 PASS` on all four ranks and status 0. The script checks
+GPU discovery, mpi4jax CUDA support, and a JIT-compiled MPI sum. It targets
+mpi4jax 0.9.1.post1's array-returning API; older examples may return tokens too.
+
+For application code:
+
+- Initialize JAX before device queries/computation. Use
+  `jax.distributed.initialize(local_device_ids=[0])` **only when each process
+  sees its own single GPU**. Other visibility layouts need distinct assignments.
+- Transfer local data with `jax.device_put`; pack only the entries to exchange.
+- Owners send values for forward ghost updates; ghost holders send contributions
+  to owners for reverse accumulation. Implement the ownership map explicitly.
+- Separate mpi4jax and mpi4py communicators, and await results before shutdown.
+
+### CUDA-aware MPI
+
+JAX GPU support, mpi4jax GPU support, and CUDA-aware MPI are separate capabilities.
+For OpenMPI, inspect the actual build rather than relying on external Spack metadata:
+
+```bash
+ompi_info --parsable --all | grep mpi_built_with_cuda_support:value
+```
+
+If it reports `true`, rerun the diagnostic with `MPI4JAX_USE_CUDA_MPI=1` to test
+device-buffer communication. This removes mpi4jax's CPU staging, but does not
+guarantee GPUDirect RDMA or eliminate staging inside MPI's transport.
+
+## Debug by stage
+
+| Symptom | First check |
+| --- | --- |
+| More processors requested than permitted | Allocation task/core counts versus launch request |
+| Missing script/package | Working directory, `sys.executable`, base/venv activation |
+| MPI/PMIx startup failure | MPI-only test and site's supported launcher |
+| Illegal instruction / missing library | CPU target and external library paths |
+| CUDA backend failure / wrong GPU mapping | GPU allocation, per-rank visibility, driver/wheel compatibility |
+| `has_cuda_support()` is false | CUDA extension build log; Spack/venv discovery issue above |
+| Collective hangs or wrong results | Matching rank participation, shapes/types, ownership map, communicator ordering |
+
+`WatchTasksAsync` warnings only at shutdown, after correct results and with
+status 0, appear low severity in the observed test; their exact cause remains
+unconfirmed. During computation, or with hangs/nonzero status, investigate them.
+Barriers are not a proven fix. For validated runs, optional
+`TF_CPP_MIN_LOG_LEVEL=2` suppresses C++ INFO/WARNING messages broadly, not the cause.
+
+Share the full first error, allocation/launch commands, exit status, package
+versions, modules/Spack lockfile, GPU/driver, and which checks passed. Multi-node
+runs additionally need reachable coordination and working inter-node transports.
+
+## UL-HPC: IRIS quick-start
+
+Run from the IRIS login node. This requests four GPUs and seven CPU cores per
+rank, matching IRIS's 28-core/four-GPU nodes:
 
 ```bash
 si-gpu -N 1 -n 4 -c 7 -G 4 -t 0-02:00:00
 ```
 
-This reserves four tasks, seven CPU cores per task, and four GPUs on one node.
-`-N` counts nodes; `-n` counts processes. Requesting GPUs alone does not reserve
-multiple CPU tasks.
-
-## Verify the existing MPI installation
-
-Inside the allocation:
-
-```bash
-spack env activate mpc-v10
-srun --mpi=list
-srun --mpi=pmix -n 4 -c 7 --cpu-bind=cores \
-    python -c 'from mpi4py import MPI; print(MPI.COMM_WORLD.rank, MPI.COMM_WORLD.size, MPI.Get_library_version(), flush=True)'
-nvidia-smi
-```
-
-The MPI command was verified on `iris-185`: four ranks reported size 4 using
-OpenMPI 4.1.6. Slurm listed `pmix` with plugin version `pmix_v6`.
-Use `--mpi=pmix` explicitly: PMIx supplies the startup connection between Slurm
-and OpenMPI. A plain Python MPI import in the interactive shell previously
-failed during MPI initialization.
-
-The inspected environment contains Python 3.12.12, pip 25.1.1, NumPy 2.3.4,
-SciPy 1.16.3, and mpi4py 4.1.1. Its binaries target AION's AMD `zen2` CPUs and
-reference AION external libraries. The MPI test establishes that MPI launches
-on IRIS; it does not establish portability of every compiled dependency.
-
-## Install the pip overlay once
-
-Use CUDA 12 JAX wheels for IRIS's V100 GPUs. CUDA 13 wheels do not support
-V100s. The tested node's NVIDIA driver was 580.159.04, which meets the CUDA 12
-JAX driver requirement. The CUDA version printed by `nvidia-smi` describes
-driver capability, not the toolkit installed in Python.
-
-Run where package downloads are available, with `mpc-v10` activated:
-
-```bash
-python -m venv --system-site-packages "$HOME/venvs/mpc-v10-jax"
-source "$HOME/venvs/mpc-v10-jax/bin/activate"
-
-# Preserve the packages already used by the FEniCS/MPI stack.
-cat > "$VIRTUAL_ENV/constraints.txt" <<'EOF'
-numpy==2.3.4
-scipy==1.16.3
-mpi4py==4.1.1
-EOF
-
-python -m pip install --upgrade pip setuptools wheel nanobind
-
-# Install JAX and its CUDA libraries before compiling mpi4jax.
-python -m pip install \
-    -c "$VIRTUAL_ENV/constraints.txt" 'jax[cuda12]'
-
-# Reuse the installed mpi4py, MPI, JAX, and CUDA build dependencies.
-MPICC="$(command -v mpicc)" \
-python -m pip install --no-build-isolation --no-cache-dir \
-    -c "$VIRTUAL_ENV/constraints.txt" 'jax[cuda12]' mpi4jax
-
-python -m pip check
-```
-
-`--system-site-packages` exposes the existing Spack Python packages to the
-virtual environment. Pip additions belong to the virtual environment; avoid
-installing them directly into Spack's environment view or using `pip --user`.
-`--no-build-isolation` lets mpi4jax build against the existing mpi4py and JAX.
-The constraints make incompatible dependency requirements fail instead of
-silently replacing the numerical/MPI stack. If resolution fails, inspect the
-reported JAX/mpi4jax requirements before choosing compatible versions.
-
-Leave `MPI4JAX_USE_CUDA_MPI` unset initially. mpi4jax normally stages GPU data
-through CPU memory for MPI communication. Direct GPU-buffer communication
-requires verified CUDA-aware MPI support; the successful CPU MPI test does
-not establish that capability.
-
-## Activate and test in each new GPU session
+Inside the allocated shell, activate the base stack first, then the pip overlay:
 
 ```bash
 spack env activate mpc-v10
 source "$HOME/venvs/mpc-v10-jax/bin/activate"
-
-srun --mpi=pmix -n 4 -c 7 --gpus-per-task=1 --cpu-bind=cores \
-    "$VIRTUAL_ENV/bin/python" -c '
-from mpi4py import MPI
-import jax
-import mpi4jax
-
-jax.config.update("jax_platforms", "cuda")
-jax.distributed.initialize(local_device_ids=[0])
-assert jax.process_count() == 4
-assert jax.local_device_count() == 1
-assert jax.device_count() == 4
-print(
-    f"rank={MPI.COMM_WORLD.rank} "
-    f"jax={jax.__version__} "
-    f"local={jax.local_devices()} "
-    f"global_count={jax.device_count()}",
-    flush=True,
-)
-jax.distributed.shutdown()
-'
-```
-
-Expect four ranks, each with one local GPU and four global GPUs. Each task is
-bound to one GPU by Slurm, so its process-local CUDA index is `0`.
-Call `jax.distributed.initialize(local_device_ids=[0])` before device queries
-or JAX computations. This check verifies imports and distributed GPU discovery;
-it does not test an mpi4jax collective or numerical correctness.
-
-On 2026-09-08, the user confirmed that this import/discovery check ran with
-JAX 0.11.1 on all four ranks, each reporting one local CUDA device and four
-global devices. The shell reported status 0. `WatchTasksAsync` connection-refused
-warnings appeared at teardown; these remain under investigation. This result
-does not yet verify GPU computation or mpi4jax collectives.
-
-Run the separate collective diagnostic (syntax checked, not yet GPU-tested):
-
-```bash
 cd "$HOME/JAX-ghost/HPC-GPU"
-unset MPI4JAX_USE_CUDA_MPI
+
+srun --mpi=pmix -n 4 -c 7 --cpu-bind=cores \
+    "$VIRTUAL_ENV/bin/python" -c 'from mpi4py import MPI; print(MPI.COMM_WORLD.rank, MPI.COMM_WORLD.size, MPI.Get_library_version(), flush=True)'
+
+export MPI4JAX_USE_CUDA_MPI=0
 srun --mpi=pmix -n 4 -c 7 --gpus-per-task=1 --cpu-bind=cores \
     "$VIRTUAL_ENV/bin/python" -u check-mpi4jax.py
 echo "srun exit status: $?"
 ```
 
-Expect `GPU sum=10.0 PASS` on every rank and exit status 0. Shutdown markers
-help locate warnings relative to explicit shutdown; stdout/stderr merging can
-still affect displayed ordering. The barriers synchronize application work,
-but are not a proven fix for background watcher shutdown warnings.
+These environment names and checkout paths belong to the tested setup; other
+UL-HPC users should substitute their own. For a new installation, follow the
+pip-overlay instructions above, using `$HOME/venvs/mpc-v10-jax` as the venv path.
+Use CUDA 12 wheels for IRIS V100s and apply the discovery patch if reusing
+Spack's mpi4py with mpi4jax 0.9.1.post1.
 
-For application runs, activate both environments and use the same launcher:
+The prepared patched source in this setup can be reinstalled without rebuilding
+Spack or MPI:
 
 ```bash
-cd "$HOME/JAX-ghost/HPC-GPU"
-srun --mpi=pmix -n 4 -c 7 --gpus-per-task=1 --cpu-bind=cores \
-    "$VIRTUAL_ENV/bin/python" -u jax-gpu.py
+MPI4JAX_BUILD_MPICC="$(command -v mpicc)" \
+"$VIRTUAL_ENV/bin/python" -m pip install \
+    --force-reinstall --no-deps --no-build-isolation \
+    "$VIRTUAL_ENV/src/mpi4jax-0.9.1.post1-cuda-fix"
 ```
 
-Before using the current `jax-gpu.py`, change its initialization to
-`jax.distributed.initialize(local_device_ids=[0])` and fix the print of
-`local_device_ids` before assignment. Print `os.environ.get("CUDA_VISIBLE_DEVICES")`
-directly; do not use its physical GPU identifiers as process-local JAX indices.
+Use `--mpi=pmix` explicitly: it worked with IRIS's advertised `pmix_v6` plugin.
+Do not infer MPI failure from a plain Python MPI import in the interactive shell.
+To test CUDA-aware transfers, set `MPI4JAX_USE_CUDA_MPI=1` and repeat the GPU
+command; keep the CPU-staged run as a baseline.
+
+For application runs, replace `check-mpi4jax.py` with the application filename.
+Before using the existing `jax-gpu.py`, fix its `local_device_ids` print before
+assignment and use `jax.distributed.initialize(local_device_ids=[0])` with this
+one-visible-GPU-per-task launch.
+
+Verified on 2026-09-08: Python 3.12.12, OpenMPI 4.1.6, mpi4py 4.1.1,
+JAX 0.11.1, patched mpi4jax 0.9.1.post1, V100 GPUs, driver 580.159.04.
+All four GPU sum checks passed with CPU staging; shutdown watcher warnings
+remained. Actual OpenMPI reports CUDA support despite Spack's external `~cuda`
+metadata. Direct-buffer mode needs its own recorded runtime result.
+
+The base environment references AION AMD `zen2` binaries and external paths;
+these checks do not establish portability of every package onto IRIS.
 
 ## References
 
-- [ULHPC getting started](https://hpc-docs.uni.lu/getting-started/)
-- [IRIS GPU nodes and allocation](https://hpc-docs.uni.lu/systems/iris/compute/)
-- [OpenMPI launching with Slurm and PMIx](https://docs.open-mpi.org/en/main/launching-apps/slurm.html)
-- [JAX installation](https://docs.jax.dev/en/latest/installation.html)
-- [mpi4jax installation](https://mpi4jax.readthedocs.io/en/latest/installation.html)
-- [mpi4jax CUDA-aware MPI precautions](https://mpi4jax.readthedocs.io/en/latest/sharp-bits.html#using-cuda-mpi)
+[JAX installation](https://docs.jax.dev/en/latest/installation.html) ·
+[JAX initialization](https://docs.jax.dev/en/latest/_autosummary/jax.distributed.initialize.html) ·
+[mpi4jax installation](https://mpi4jax.readthedocs.io/en/latest/installation.html) ·
+[mpi4jax precautions](https://mpi4jax.readthedocs.io/en/latest/sharp-bits.html) ·
+[OpenMPI/Slurm](https://docs.open-mpi.org/en/main/launching-apps/slurm.html) ·
+[IRIS GPU nodes](https://hpc-docs.uni.lu/systems/iris/compute/)
