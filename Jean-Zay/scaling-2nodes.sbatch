@@ -1,22 +1,29 @@
 #!/bin/bash
 #SBATCH --job-name=jz-scaling-2nodes
-#SBATCH --partition=gpu
+#SBATCH --constraint=h100
+#SBATCH --hint=nomultithread
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=4
-#SBATCH --gpus-per-node=4
-#SBATCH --cpus-per-task=1
+#SBATCH --gres=gpu:4
+#SBATCH --cpus-per-task=24
 #SBATCH --time=01:00:00
 #SBATCH --output=jz-scaling-2nodes-%j.out
 
-# Submit from the repository root or Jean-Zay/. Default partition: IRIS gpu.
-# Override the partition/account with sbatch options on another HPC.
-# Activate the site's GPU JAX + MPI environment below, or set JAXGHOST_ENV_SETUP
-# to a shell setup file (export this variable before calling sbatch).
+# Jean Zay H100: 4 GPUs and 96 physical CPU cores per node.
+# Submit from JAX-ghost/ or Jean-Zay/:
+#   export JAXGHOST_ENV_SETUP=/absolute/path/to/jax-mpi-environment.sh
+#   sbatch --account=YOUR_PROJECT@h100 scaling-2nodes.sbatch
+# The setup file must load your compatible JAX/Python/MPI modules and/or venv.
+# Add the project's QoS at submission if required. No IRIS modules are used.
 set -eo pipefail
-if [[ -n ${JAXGHOST_ENV_SETUP:-} ]]; then
-    source "$JAXGHOST_ENV_SETUP"
+: "${JAXGHOST_ENV_SETUP:?Set JAXGHOST_ENV_SETUP to your JAX/MPI shell setup file}"
+if [[ ! -r $JAXGHOST_ENV_SETUP ]]; then
+    echo "Cannot read environment setup: $JAXGHOST_ENV_SETUP" >&2
+    exit 1
 fi
-# Example: source /path/to/environment/bin/activate
+module purge
+module load arch/h100
+source "$JAXGHOST_ENV_SETUP"
 set -u
 cd "${SLURM_SUBMIT_DIR:?Submit this script using sbatch}"
 if [[ -f scale.py && -f ../src/jaxghost/sharded_matrix.py ]]; then
@@ -28,11 +35,13 @@ if [[ ! -f Jean-Zay/scale.py ]]; then
 fi
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 
-# One driver launches fresh MPI steps. Do not prefix this Python command with srun.
-# Keep allocated peer GPUs accessible to NCCL; the worker selects and verifies
-# exactly one distinct GPU per rank. Add the site-required --mpi option if needed.
-# For a different GPU layout, change BOTH --gpus-per-node=4 settings below and
-# the SBATCH allocation above; available prepared rank counts stop at eight.
+# One Python driver; srun launches each MPI configuration independently.
+# All allocated GPUs stay accessible to NCCL. The worker selects and verifies
+# exactly one GPU per rank before MPI/JAX initialization.
+# Add --mpi=... to the launcher only if required by your site's MPI module.
+module list
+command -v python
+
 python -u Jean-Zay/scale.py \
   --sizes 99 \
   --ranks 1 2 4 8 \
@@ -40,4 +49,4 @@ python -u Jean-Zay/scale.py \
   --gpus-per-node 4 \
   --timeout 600 \
   --output "Jean-Zay/results/scaling-2nodes-${SLURM_JOB_ID}" \
-  --launcher 'srun --nodes={nodes} --exact --ntasks={ranks} --distribution=block:block --gpus-per-node=4 --gpu-bind=none --cpus-per-task=1 --cpu-bind=cores'
+  --launcher "srun --nodes={nodes} --exact --ntasks={ranks} --distribution=block:block --gpus-per-node=4 --gpu-bind=none --cpus-per-task=${SLURM_CPUS_PER_TASK} --cpu-bind=cores --hint=nomultithread"

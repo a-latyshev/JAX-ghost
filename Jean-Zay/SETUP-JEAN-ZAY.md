@@ -52,8 +52,10 @@ installation during the benchmark.
 
 ## Submit the small test before scaling
 
-The bundled batch scripts default to the IRIS partition `gpu`; override this on
-Jean Zay with the partition/account/QoS from a working job for the chosen GPU type.
+The smoke script defaults to the IRIS partition `gpu`; override it on Jean Zay
+with the partition/account/QoS from a working job. The two scaling scripts now
+target H100 directly, load `arch/h100` followed by `JAXGHOST_ENV_SETUP`, and
+reserve 24 CPU cores per rank. Submit those with `--account=PROJECT@h100`.
 For H100, the official guide uses `--constraint=h100` and an account of the form
 `PROJECT@h100`. Do not copy an IRIS account, partition or Spack environment.
 
@@ -63,9 +65,9 @@ sbatch --partition=SITE_GPU_PARTITION --account=PROJECT@h100 \
   --constraint=h100 Jean-Zay/smoke-1node.sbatch
 ```
 
-Add the site's required QoS and MPI launcher option, if any. The scripts currently
-reserve four GPUs per node and one CPU core per rank. Adjust CPU allocation and
-the launcher's `--cpus-per-task` together if the site's resource rules require it.
+Add the site's required QoS and MPI launcher option, if any. The smoke script reserves four GPUs per node and one CPU core per rank; adjust
+both its allocation and launcher CPU count if required. The scaling scripts
+use 24 CPU cores per rank in both the allocation and worker steps.
 After 1/2/4 ranks pass, submit `scaling-1node.sbatch`; test two nodes only after
 single-node correctness and timings work.
 

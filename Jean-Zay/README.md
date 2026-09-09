@@ -57,9 +57,10 @@ connectivity between compute nodes; use site-approved network settings.
 ### Ready-to-submit batch scripts
 
 Submit from the repository root or `Jean-Zay/` after configuring your site's
-JAX/MPI environment. The scripts reserve four GPUs per node and default to the
-IRIS `gpu` partition; override it using `sbatch --partition=...` on another HPC. Either edit their environment section or export `JAXGHOST_ENV_SETUP`
-with the absolute path to your site's shell setup file.
+JAX/MPI environment. The scripts reserve four GPUs per node. The scaling scripts target Jean Zay H100
+(`arch/h100`, 24 CPU cores per rank); the smoke script retains its IRIS `gpu`
+partition default. The scaling scripts require `JAXGHOST_ENV_SETUP` to name an absolute path to
+your compatible JAX/Python/MPI shell setup file, loaded after `arch/h100`.
 
 | Script | Allocation | Cases |
 | --- | --- | --- |
@@ -71,8 +72,9 @@ with the absolute path to your site's shell setup file.
 # Replace partition/account with the site's values.
 sbatch --partition=GPU_PARTITION --account=ACCOUNT Jean-Zay/smoke-1node.sbatch
 # After the smoke test passes:
-sbatch --partition=GPU_PARTITION --account=ACCOUNT Jean-Zay/scaling-1node.sbatch
-sbatch --partition=GPU_PARTITION --account=ACCOUNT Jean-Zay/scaling-2nodes.sbatch
+export JAXGHOST_ENV_SETUP=/absolute/path/to/jax-mpi-environment.sh
+sbatch --account=PROJECT@h100 Jean-Zay/scaling-1node.sbatch
+sbatch --account=PROJECT@h100 Jean-Zay/scaling-2nodes.sbatch
 ```
 
 The two-node script runs the 1/2/4-rank points on one node and the 8-rank point
