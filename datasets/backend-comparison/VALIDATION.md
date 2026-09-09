@@ -83,3 +83,28 @@ Worker and launcher hashes were unchanged during sampling. Comparison artifacts
 include warmed computation, compilation-plus-batch totals, and detailed phase
 columns; the combined figure was visually inspected. See
 [the CPU allocation comparison](results/20260909T091109Z/CPU-COMPARISON.md).
+
+## P1 subdivision 159, one CPU core per rank
+
+Campaign [20260909T095026Z](results/20260909T095026Z/REPORT.md) ran in allocation
+5880565 on iris-177. All nine smoke launches at 2–4 ranks passed. Of 27 fresh
+full launches, 24 passed; all three four-rank mpi4jax launches reproduced the
+existing `shape_util.cc:757` XLA fusion assertion. No memory failures occurred.
+The repository-required MPI runner reproduced the existing two-rank float32
+`test_matrix_dolfinx` failure (27 passed, one failed per rank; max violating
+absolute difference 9.059906e-06), then stopped before three/four ranks.
+
+Nine reporting tests passed, including selected-size plots, a two-rank scaling
+baseline, and missing configurations. All 12 fixture groups passed the reporting
+audit, including identical fixture fingerprints and verified CPU/GPU assignment.
+Every successful full result has 4,096,000 DoFs. Worker/source hashes remained
+unchanged during sampling, and smoke logs show exactly one matvec compilation
+per rank. See `final-audit.json`, `compilation-audit.json`, and `REGRESSION.md` in
+the campaign folder. Scaling and compilation-inclusive batch plots were visually
+inspected. Existing campaign results and public APIs were preserved.
+
+Steady-state sharding scales from 1.033 ms at two ranks to 0.513 ms at four ranks
+(2.01x). Its lowering + compilation + 100-call batch totals are 346.23, 343.26,
+and 358.68 ms at 2/3/4 ranks, so the startup-inclusive metric does not share that
+strong scaling. First execution remains separately reported and excluded from
+those derived totals.

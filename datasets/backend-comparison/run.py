@@ -23,6 +23,7 @@ def command_output(command):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--sharding-study', action='store_true')
     parser.add_argument('--output', type=Path)
     parser.add_argument('--sizes', type=int, nargs='+', default=[46,99])
     parser.add_argument('--ranks', type=int, nargs='+', choices=[1,2,3,4], default=[1,2,3,4])
@@ -34,6 +35,8 @@ def main():
     args = parser.parse_args()
     if min(args.sizes) < 1 or len(set(args.sizes)) != len(args.sizes) or len(set(args.ranks)) != len(args.ranks):
         parser.error('sizes must be positive and size/rank lists must contain no duplicates')
+    if args.sharding_study and (args.jax_only_from or args.jax_cpus_per_rank != 1):
+        parser.error('sharding study uses fresh fixtures and one CPU per rank')
     out = (args.output or HERE/'results'/datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')).resolve()
     out.mkdir(parents=True, exist_ok=False)
     (out/'raw').mkdir()
@@ -41,7 +44,14 @@ def main():
     baseline = args.jax_only_from.resolve() if args.jax_only_from else None
     old = json.loads((baseline/'manifest.json').read_text()) if baseline else None
     job = os.environ['SLURM_JOB_ID']
-    (out/'allocation.txt').write_text(command_output(['scontrol','show','job',job])+'\n')
+    allocation = command_output(['scontrol','show','job',job])
+    (out/'allocation.txt').write_text(allocation+'\n')
+    import re
+    def seconds(value):
+        days, sep, clock = value.partition('-')
+        return (int(days)*86400 if sep else 0) + sum(int(x)*w for x,w in zip((clock if sep else days).split(':'),(3600,60,1)))
+    deadline = time.time() + seconds(re.search(r'TimeLimit=(\S+)',allocation)[1]) - seconds(re.search(r'RunTime=(\S+)',allocation)[1]) - 180
+
     gpu_text = command_output(['nvidia-smi','--query-gpu=index,uuid,name,pci.bus_id','--format=csv,noheader'])
     (out/'gpus.csv').write_text(gpu_text+'\n')
     gpu_rows = [[x.strip() for x in row] for row in csv.reader(gpu_text.splitlines())]
@@ -95,6 +105,23 @@ def main():
         estimated_gpu_bytes=int(8 * 2 * ((n+1)**3 / p) * (27*12 + 4 + 32) + 2**30),
         assumptions='27 nonzeros/row; 2x partition allowance; 8 buffers; 1 GiB runtime; estimate only')
         for n in settings['sizes'] for p in settings['ranks']]
+    manifest['sharding_study'] = args.sharding_study
+    manifest['monitor_cpu'] = list(topology.values())[4]
+    manifest['host_memory_limits'] = {}
+    for path in (Path('/sys/fs/cgroup/memory.max'), Path('/sys/fs/cgroup/memory/memory.limit_in_bytes')):
+        if path.exists(): manifest['host_memory_limits'][str(path)] = path.read_text().strip()
+    manifest['cgroup_membership'] = Path('/proc/self/cgroup').read_text()
+    # Resolve the launcher's cgroup and all parent limits, not only the root.
+    for line in manifest['cgroup_membership'].splitlines():
+        _, controllers, relative = line.split(':',2)
+        base = Path('/sys/fs/cgroup') if not controllers else Path('/sys/fs/cgroup/memory')
+        if controllers and 'memory' not in controllers.split(','): continue
+        directory = base/relative.lstrip('/')
+        for parent in (directory, *directory.parents):
+            if parent != base and base not in parent.parents: continue
+            path = parent/('memory.max' if not controllers else 'memory.limit_in_bytes')
+            if path.exists(): manifest['host_memory_limits'][str(path)] = path.read_text().strip()
+    manifest['allocation_host_memory_bytes'] = 756000*1024**2 if 'mem=756000M' in allocation else None
     write(out/'manifest.json',manifest)
     env = dict(HOME=os.environ['HOME'], USER=os.environ['USER'], LOGNAME=os.environ.get('LOGNAME',os.environ['USER']),
         PATH='/usr/local/bin:/usr/bin:/bin', LANG='C.UTF-8', SLURM_JOB_ID=job,
@@ -102,22 +129,47 @@ def main():
         BENCH_CPU_IDS=','.join(map(str,cpus)), BENCH_GPU_UUIDS=','.join(manifest['gpu_uuids']))
     launches = []
     print(f'Campaign: {out}\nCPU IDs: {cpus}\nGPU UUIDs: {manifest["gpu_uuids"]}',flush=True)
-    def launch(backend, ranks, name, options, result=None, timeout=None):
+    def launch(backend, ranks, name, options, result=None, timeout=None, memory=False):
         cmd = ['bash','--noprofile','--norc',str(HERE/'launch.sh'),backend,str(ranks),*map(str,options)]
+        if args.sharding_study and time.time() >= deadline-30:
+            launches.append(dict(name=name,backend=backend,ranks=ranks,exit_code=None,
+                skipped_reason='Insufficient allocation time remaining',result=str(result) if result else None))
+            write(out/'launches.json',launches)
+            return False
         log = out/'logs'/f'{name}.log'
+        worker_env = dict(env)
+        monitor = None
+        memory_dir = out/'memory'/name
+        if memory:
+            memory_dir.mkdir(parents=True)
+            worker_env['BENCH_MEMORY_DIR'] = str(memory_dir)
+            monitor = subprocess.Popen(['/usr/bin/python3', str(HERE/'memory_probe.py'),
+                str(memory_dir), '--cpu', str(manifest['monitor_cpu'])],env=env)
+
         print(f'Start {name}',flush=True)
         began = time.time()
         timed_out = False
-        with log.open('w') as stream:
-            proc = subprocess.Popen(cmd,env=env,stdout=stream,stderr=subprocess.STDOUT,start_new_session=True)
-            try:
-                status = proc.wait(timeout=timeout or args.timeout)
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                os.killpg(proc.pid,signal.SIGKILL)
-                proc.wait()
-                status = 124
+        try:
+            with log.open('w') as stream:
+                proc = subprocess.Popen(cmd,env=worker_env,stdout=stream,stderr=subprocess.STDOUT,start_new_session=True)
+                try:
+                    status = proc.wait(timeout=min(timeout or args.timeout, max(1,deadline-time.time())) if args.sharding_study else timeout or args.timeout)
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    os.killpg(proc.pid,signal.SIGKILL)
+                    proc.wait()
+                    status = 124
+        finally:
+            if monitor is not None:
+                (memory_dir/'stop').touch()
+                try: monitor.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    monitor.terminate()
+                    try: monitor.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        monitor.kill(); monitor.wait()
         record = dict(name=name,backend=backend,ranks=ranks,command=cmd,exit_code=status,
+            memory_directory=str(memory_dir) if memory else None,
             timed_out=timed_out,wall_seconds=time.time()-began,log=str(log),result=str(result) if result else None)
         if result and status == 0 and not result.is_file():
             record.update(exit_code=1,error='Worker exited without a result')
@@ -125,6 +177,14 @@ def main():
         write(out/'launches.json',launches)
         print(f'End {name}: exit={record["exit_code"]}',flush=True)
         return record['exit_code'] == 0
+    if args.sharding_study:
+        from sharding_study import campaign
+        campaign(out, manifest, launch, args)
+        subprocess.run(['bash','--noprofile','--norc',str(HERE/'launch.sh'),
+            'study-summary','1',str(out)],env=env,check=True)
+        print(f'Results: {out}',flush=True)
+        if any(r.get('exit_code') != 0 for r in launches): raise SystemExit(1)
+        return
     def configuration(n,p,trial,smoke=False):
         label = f'{"smoke" if smoke else "full"}-n{n}-p{p}-trial{trial}'
         data_root = out/'fixtures'/label

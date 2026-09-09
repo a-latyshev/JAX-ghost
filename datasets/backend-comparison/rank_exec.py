@@ -12,4 +12,6 @@ if sys.argv[1] == 'dolfinx':
     os.environ['CUDA_VISIBLE_DEVICES'] = ''
 else:
     os.environ['CUDA_VISIBLE_DEVICES'] = os.environ['BENCH_GPU_UUIDS'].split(',')[rank]
+from memory_probe import mark
+mark('imports')
 os.execv(sys.executable, [sys.executable, *sys.argv[2:]])

@@ -7,11 +7,14 @@ import numpy as np
 from mpi4py import MPI
 from common import StoredMatrix, check_result, environment, timings, write_json, placement, fingerprints
 
+from memory_probe import mark
+
 COMM = MPI.COMM_WORLD
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--fixture-only', action='store_true')
     parser.add_argument('--result', type=Path, required=True)
     parser.add_argument('--trial', type=int, required=True)
     parser.add_argument('--subdivisions', type=int, default=46,
@@ -31,6 +34,7 @@ def main():
     from dolfinx import fem, la, mesh
     import ufl
 
+    mark('assembly')
     domain = mesh.create_unit_cube(COMM, *([args.subdivisions] * 3), cell_type=mesh.CellType.tetrahedron)
     V = fem.functionspace(domain, ('Lagrange', 1))
     u, v = ufl.TrialFunction(V), ufl.TestFunction(V)
@@ -56,39 +60,46 @@ def main():
         data.update({f'{axis}_owned_range': np.asarray(imap.local_range, dtype=np.int64),
                      f'{axis}_ghosts': np.asarray(imap.ghosts, dtype=np.int64),
                      f'{axis}_owners': np.asarray(imap.owners, dtype=np.int32)})
+    mark('reference')
     A.mult(x, y)
     data['single_expected'] = y.array.copy()
-    y.array[:] = 0
-    for _ in range(args.iterations):
-        A.mult(x, y)
-    data['batch_expected'] = y.array.copy()
-    check_result(COMM, data['batch_expected'], args.iterations * data['single_expected'], nr)
-    for _ in range(args.warmup):
-        A.mult(x, y)
-    errors = []
-    samples = []
-    for _ in range(args.repeats):
+    errors, samples = [], []
+    if args.fixture_only:
+        data['batch_expected'] = args.iterations * data['single_expected']
+    else:
         y.array[:] = 0
-        COMM.Barrier()
-        start = MPI.Wtime()
         for _ in range(args.iterations):
             A.mult(x, y)
-        elapsed = MPI.Wtime() - start
-        samples.append(COMM.allgather(elapsed))
-        errors.append(check_result(COMM, y.array, data['batch_expected'], nr))
+        data['batch_expected'] = y.array.copy()
+        check_result(COMM, data['batch_expected'], args.iterations * data['single_expected'], nr)
+        for _ in range(args.warmup):
+            A.mult(x, y)
+        errors = []
+        samples = []
+        for _ in range(args.repeats):
+            y.array[:] = 0
+            COMM.Barrier()
+            start = MPI.Wtime()
+            for _ in range(args.iterations):
+                A.mult(x, y)
+            elapsed = MPI.Wtime() - start
+            samples.append(COMM.allgather(elapsed))
+            errors.append(check_result(COMM, y.array, data['batch_expected'], nr))
     meta = dict(format_version=1, operator='Poisson stiffness, no boundary conditions',
                 dtype='float64', rank_count=COMM.size, subdivisions=args.subdivisions,
                 global_dofs=int(row_map.size_global), global_cells=6 * args.subdivisions**3,
                 settings=dict(warmup=args.warmup, iterations=args.iterations, repeats=args.repeats),
                 dolfinx_version=dolfinx.__version__, environment=environment(COMM),
-                timing=dict(timer='MPI.Wtime', **timings(samples, args.iterations)))
+                timing=None if args.fixture_only else dict(timer='MPI.Wtime', **timings(samples, args.iterations)))
     if meta['global_dofs'] != (args.subdivisions + 1)**3:
         raise ValueError('unexpected global DOF count')
     adapter = StoredMatrix(data, meta, COMM)
     adapter.validate_ownership(COMM, meta['global_dofs'])
     meta['partitions'] = COMM.allgather(dict(rank=COMM.rank, owned_rows=nr,
         owned_cols=col_map.size_local, ghost_rows=row_map.num_ghosts,
-        ghost_cols=col_map.num_ghosts, nnz=nnz))
+        ghost_cols=col_map.num_ghosts, nnz=nnz,
+        array_bytes={k:int(v.nbytes) for k,v in data.items()}))
+    mark('fixture_io')
     folder = args.output / f'n{args.subdivisions}' / f'{COMM.size}ranks'
     folder.mkdir(parents=True, exist_ok=True)
     # Remove completion marker before replacing files in an existing dataset.
@@ -109,7 +120,8 @@ def main():
             dataset=str(folder.resolve()), fingerprints=meta['fingerprints'], placement=hardware,
             timing=meta['timing'], validation=errors, correctness_passed=True, phases={},
             versions=dict(dolfinx=dolfinx.__version__), environment=meta['environment']))
-        print(f'EXPORT PASS {folder}: {meta["timing"]["median_seconds_per_matvec"]:.6g} s/matvec', flush=True)
+        print(f'EXPORT PASS {folder}', flush=True)
+    mark('workload_done')
 
 
 if __name__ == '__main__':

@@ -24,6 +24,7 @@ else
     export OMPI_MCA_pml=ob1 OMPI_MCA_btl=self,vader,tcp
     if [[ $backend == sharding ]]; then export JAX_PLATFORMS=cuda; fi
 fi
+if [[ $backend == study-summary ]]; then exec python "$here/study_summary.py" "$@"; fi
 if [[ $backend == summary ]]; then exec python "$here/summarize.py" "$@"; fi
 if [[ $backend != dolfinx && $backend != regression ]]; then
     nvidia_lib_dirs=$(python -c 'from pathlib import Path; import sysconfig; print(":".join(str(p) for p in sorted((Path(sysconfig.get_path("purelib"))/"nvidia").glob("*/lib"))))')

@@ -166,3 +166,40 @@ This runs fresh P1 fixtures with 4,096,000 DoFs. Size and rank lists default to
 the smallest selected rank count: for this campaign, speedup is T2/Tp and
 parallel efficiency is 2*T2/(p*Tp). The ideal curve is p/2. A missing baseline
 leaves scaling unavailable. GPU and host memory inventories accompany results.
+
+Completed run: [P1 159 results](results/20260909T095026Z/REPORT.md),
+[scaling](results/20260909T095026Z/scaling.png), and
+[main plus compilation](results/20260909T095026Z/batch.png).
+The four-rank mpi4jax compiler failures are preserved in that report.
+
+## Sharding-only scaling and memory study
+
+```bash
+BENCH_JOB_ID=5884375 bash datasets/backend-comparison/run.sh \
+  --sharding-study --sizes 46 79 99 125 159 199 --ranks 2 3 4
+```
+
+DOLFINx generates one fixture and Ax reference per size/rank pair with no timed
+native batches. The batch reference is 100*Ax. Three fresh sharding timing
+processes reuse the fixture, followed by one separate memory profile with the
+same computation. Whole-matvec JIT, float64, one CPU core and one GPU per rank,
+100-call Python loops, warmups and sampling counts are unchanged.
+
+The external memory sampler uses an unused physical core and targets 100 ms
+samples, flushing every sample to disk. It records per-process RSS/high-water
+marks and NVIDIA GPU process usage. Worker phase JSONL files preserve JAX
+allocator snapshots, including current/peak usage, pool size and allocator
+limit where supported. Unsupported measurements remain blank/null. Phase
+snapshots are synchronized; lifetime peaks are not phase-local peaks. Samples
+can miss short spikes, and simultaneous summed RSS can double-count shared
+pages. Memory-profiling launch timings never enter the performance summary.
+
+`memory-summary.csv` contains separate native generation and JAX replay peaks;
+`memory-phases.csv` contains phase-specific sampled peaks. Full rank histories
+are under `memory/`. Lowered text size is extracted after workload memory
+collection. This is a textual representation size, not executable size.
+
+The study reserves three minutes before allocation expiry for postprocessing,
+retains failed/skipped cases explicitly, and does not expand beyond the requested
+sizes. `study_summary.py RESULT_DIR` regenerates sharding-only reports and
+PNG/PDF plots. Existing three-backend campaign defaults are preserved.
