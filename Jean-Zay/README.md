@@ -51,6 +51,34 @@ connectivity between compute nodes; use site-approved network settings.
 
 ## 2. Strong scaling and plots
 
+### Ready-to-submit batch scripts
+
+Submit from the repository root or `Jean-Zay/` after configuring your site's
+JAX/MPI environment. The scripts reserve four GPUs per node and default to the
+IRIS `gpu` partition; override it using `sbatch --partition=...` on another HPC. Either edit their environment section or export `JAXGHOST_ENV_SETUP`
+with the absolute path to your site's shell setup file.
+
+| Script | Allocation | Cases |
+| --- | --- | --- |
+| [smoke-1node.sbatch](smoke-1node.sbatch) | 1 node, 4 GPUs | n4, 1/2/4 ranks; one trial, one warmup, two batches |
+| [scaling-1node.sbatch](scaling-1node.sbatch) | 1 node, 4 GPUs | n99, 1/2/4 ranks; full timing defaults |
+| [scaling-2nodes.sbatch](scaling-2nodes.sbatch) | 2 nodes, 4 GPUs each | n99, 1/2/4/8 ranks; full timing defaults |
+
+```bash
+# Replace partition/account with the site's values.
+sbatch --partition=GPU_PARTITION --account=ACCOUNT Jean-Zay/smoke-1node.sbatch
+# After the smoke test passes:
+sbatch --partition=GPU_PARTITION --account=ACCOUNT Jean-Zay/scaling-1node.sbatch
+sbatch --partition=GPU_PARTITION --account=ACCOUNT Jean-Zay/scaling-2nodes.sbatch
+```
+
+The two-node script runs the 1/2/4-rank points on one node and the 8-rank point
+on two nodes. Its result therefore includes the cost of crossing nodes.
+Two-node execution remains unverified. Each script writes a separate
+`Jean-Zay/results/<script-name>-<job-id>/` directory with raw logs and results.
+The IRIS-specific `small-test.sh` remains available with its local environment setup.
+
+
 Allocate enough GPUs/CPUs first. Launch **one driver**, not one driver per rank:
 
 ```bash
