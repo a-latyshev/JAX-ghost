@@ -113,3 +113,14 @@ To regenerate summaries, activate mpc-v10 and its venv, then run:
 ```bash
 python datasets/backend-comparison/summarize.py /absolute/path/to/results/RUN
 ```
+
+## Curves including compilation
+
+Runtime and DOLFINx-ratio plots include dashed JAX curves for
+`tracing/lowering + compilation + one warmed 100-call batch`.
+The batch plot uses total milliseconds; the per-call plot amortizes this total
+over 100 calls. DOLFINx's total equals its main batch time. Each launch's costs
+are added before taking the median across launches. These derived totals exclude
+first-execution startup and other setup; they are not measured cold-run wall times.
+CSV columns `total_ms_per_batch`, `total_amortized_us_per_matvec`, trial total
+ranges and the ratios ending in `_total` expose the same values.

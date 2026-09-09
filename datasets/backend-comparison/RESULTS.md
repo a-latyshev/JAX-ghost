@@ -27,6 +27,14 @@ These results compare the installed stacks with matched CPU/GPU placement. Their
 
 [Full report](results/20260909T075352Z/REPORT.md) · [CSV](results/20260909T075352Z/summary.csv) · [Validation](VALIDATION.md)
 
+The dashed JAX curves below include tracing/lowering and compilation once,
+plus one warmed 100-call batch. The per-call graph divides that total by 100;
+the batch graph shows total milliseconds. Solid curves show warmed computation.
+First-execution startup and other setup remain separate, so these are derived
+compilation-plus-computation totals rather than measured cold-run timings.
+
+![Batch comparison including compilation](results/20260909T075352Z/batch.png)
+
 ![Runtime comparison](results/20260909T075352Z/matvec.png)
 
 ![Startup phases](results/20260909T075352Z/startup.png)

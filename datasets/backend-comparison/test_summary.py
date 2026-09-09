@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
-from summarize import summarize
+from summarize import summarize, total_timing_fields
 
 
 def run_case(out, change=None):
@@ -41,3 +41,25 @@ def test_rank_max_before_median(tmp_path):
 def test_reject_mismatched_comparison(tmp_path, change):
     with pytest.raises(AssertionError):
         run_case(tmp_path,change)
+
+
+def test_total_pairs_compilation_and_batch_before_median():
+    # Median of the totals is 10 s; adding independent medians would give 18 s.
+    group = [dict(backend='mpi4jax',settings=dict(iterations=100),
+                  timing=dict(median_seconds_per_matvec=batch/100),
+                  phases=dict(lowering=dict(max_seconds=compile_seconds/4),
+                              compilation=dict(max_seconds=3*compile_seconds/4),
+                              first_execution=dict(max_seconds=1000)))
+             for compile_seconds,batch in [(1,9),(9,1),(9,9)]]
+    fields = total_timing_fields(group)
+    assert fields['total_ms_per_batch'] == pytest.approx(10000)
+    assert fields['total_amortized_us_per_matvec'] == pytest.approx(100000)
+    assert fields['min_trial_total_ms'] == pytest.approx(10000)
+    assert fields['max_trial_total_ms'] == pytest.approx(18000)
+
+
+def test_dolfinx_total_has_no_compilation_charge():
+    fields = total_timing_fields([dict(backend='dolfinx',settings=dict(iterations=100),
+                                      timing=dict(median_seconds_per_matvec=.002),phases={})])
+    assert fields['total_ms_per_batch'] == pytest.approx(200)
+    assert fields['total_amortized_us_per_matvec'] == pytest.approx(2000)

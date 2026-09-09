@@ -53,3 +53,13 @@ The maximum full-run global L2 error was 5.373506661414258e-13.
 
 CSV, Markdown, and five PNG/PDF figure pairs were generated. Runtime and startup
 figures were visually inspected. Results are summarized in [RESULTS.md](RESULTS.md).
+
+## Compilation-plus-batch plot update
+
+Regenerated the runtime and DOLFINx-ratio figures from the saved raw measurements
+with dashed curves for lowering + compilation + one warmed 100-call batch.
+Costs are paired within each trial before the median is computed. First-execution
+startup remains excluded. Seven pytest tests passed, including trial pairing,
+unit conversion and zero compilation cost for DOLFINx. The updated batch and
+ratio figures were visually inspected. Runtime worker hashes still match the
+original manifest; `postprocessing.json` records the updated summarizer hashes.

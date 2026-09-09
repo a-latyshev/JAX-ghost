@@ -6,7 +6,7 @@ from jax.experimental import sparse
 from jax.sharding import PartitionSpec as P
 import numpy as np
 
-from .matrix import _read_structure
+from ._csr_metadata import _read_structure
 from .sharded import ShardedJAXGhost, _check_array
 
 

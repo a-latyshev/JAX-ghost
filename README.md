@@ -5,6 +5,13 @@ DOLFINx supplies ownership metadata; JAX and mpi4jax exchange owner values into
 local ghost entries. Currently supports scalar and blocked vector P1/P2/P3 forward INSERT and reverse ADD updates on 1D, 2D, and 3D
 meshes, with one local JAX device per MPI rank. CPU execution is tested.
 
+## Portable sharded GPU tests
+
+[Jean-Zay](Jean-Zay/README.md) provides prepared DOLFINx matrices for 1–8 ranks,
+MPI/GPU placement checks, and strong-scaling plots. Replay requires GPU-enabled
+JAX, NumPy and mpi4py, but not DOLFINx or mpi4jax. The mpi4jax numerical backend
+is an optional extra (`jaxghost[mpi4jax]`); existing MPI backend examples require it.
+
 ## Current scope
 
 1. One JAX device per MPI process. Each MPI rank manages one local JAX device,

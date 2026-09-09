@@ -8,7 +8,15 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
-import mpi4jax
+try:
+    import mpi4jax
+except ModuleNotFoundError as exc:
+    if exc.name != "mpi4jax":
+        raise
+    raise ImportError(
+        "The mpi4jax backend requires mpi4jax. Install jaxghost[mpi4jax] "
+        "with an MPI-compatible build, or use ShardedJAXGhost/ShardedJAXMatrixCSR."
+    ) from exc
 
 
 from ._metadata import build_plan, _collective_check

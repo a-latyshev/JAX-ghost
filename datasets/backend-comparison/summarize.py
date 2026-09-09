@@ -8,6 +8,29 @@ import statistics as st
 BACKENDS = ('dolfinx','mpi4jax','sharding')
 
 
+def total_timing_fields(group):
+    """Compilation once plus one warmed batch, paired within each launch.
+
+    Each separately synchronized phase contributes its maximum rank duration.
+    First execution and other setup are deliberately outside this derived total.
+    """
+    totals = []
+    counts = {d['settings']['iterations'] for d in group}
+    assert len(counts) == 1
+    iterations, = counts
+    for d in group:
+        batch = d['timing']['median_seconds_per_matvec'] * iterations
+        overhead = (sum(d['phases'][phase]['max_seconds']
+                        for phase in ('lowering', 'compilation'))
+                    if d['backend'] != 'dolfinx' else 0.0)
+        totals.append(overhead + batch)
+    median = st.median(totals)
+    return dict(total_ms_per_batch=median*1e3,
+                total_amortized_us_per_matvec=median/iterations*1e6,
+                min_trial_total_ms=min(totals)*1e3,
+                max_trial_total_ms=max(totals)*1e3)
+
+
 def summarize(out):
     manifest = json.loads((out/'manifest.json').read_text())
     launches = json.loads((out/'launches.json').read_text())
@@ -56,6 +79,7 @@ def summarize(out):
                     med = st.median(times)
                     row.update(us_per_matvec=med*1e6,min_trial_us=min(times)*1e6,max_trial_us=max(times)*1e6,
                                ms_per_batch=med*manifest['settings']['iterations']*1e3)
+                    row.update(total_timing_fields(group))
                     if backend != 'dolfinx':
                         for name in ('lowering','compilation','first_execution'):
                             row[name+'_ms'] = 1e3*st.median(d['phases'][name]['max_seconds'] for d in group)
@@ -71,7 +95,9 @@ def summarize(out):
             r['efficiency'] = r['speedup']/r['ranks']
         for other, name in [('dolfinx','dolfinx_over_backend'),('mpi4jax','mpi4jax_over_backend')]:
             b = next(x for x in rows if x['subdivisions']==r['subdivisions'] and x['backend']==other and x['ranks']==r['ranks'])
-            if b['status'] == 'complete': r[name] = b['us_per_matvec']/r['us_per_matvec']
+            if b['status'] == 'complete':
+                r[name] = b['us_per_matvec']/r['us_per_matvec']
+                r[name+'_total'] = b['total_ms_per_batch']/r['total_ms_per_batch']
     fields = list(dict.fromkeys(k for row in rows for k in row))
     with (out/'summary.csv').open('w') as f:
         writer=csv.DictWriter(f,fieldnames=fields);writer.writeheader();writer.writerows(rows)
@@ -85,6 +111,15 @@ def summarize(out):
     for r in rows:
         value = lambda k: f'{r[k]:.2f}' if k in r and r['status']=='complete' else '—'
         lines.append(f"| {r['dofs']:,} | {r['ranks']} | {r['backend']} | {r['cpus']} | {r['gpus']} | {r['successful_trials']}/3 | {value('us_per_matvec')} | {value('ms_per_batch')} | {value('speedup')} |")
+    lines += ['', '## Compilation plus one 100-call batch', '',
+        'Derived total = tracing/lowering + compilation + one warmed 100-call batch. DOLFINx has no JAX compilation cost, so its total equals its batch time. First-execution startup, assembly, uploads, warmups and other setup remain excluded; this is not a measured cold-run wall time.',
+        'Costs are added within each launch before taking the median across launches. Each separately timed compilation phase uses its maximum rank duration. Dashed curves add these totals to the runtime and DOLFINx-ratio plots; the per-call plot divides the total by 100.', '',
+        '| DoFs | Ranks | Backend | Main batch ms | Compilation + batch ms | DOLFINx / total |',
+        '| ---: | ---: | :--- | ---: | ---: | ---: |']
+    for r in rows:
+        if r['status'] != 'complete': continue
+        ratio = f"{r['dolfinx_over_backend_total']:.2f}" if 'dolfinx_over_backend_total' in r else '—'
+        lines.append(f"| {r['dofs']:,} | {r['ranks']} | {r['backend']} | {r['ms_per_batch']:.2f} | {r['total_ms_per_batch']:.2f} | {ratio} |")
     lines += ['', '## JAX startup phases', '',
         'Separate MPI.Wtime measurements, maximum across ranks; median across launches. First execution includes runtime initialization remaining after explicit compilation. Compilation caching is disabled.', '',
         '| DoFs | Ranks | Backend | Lowering ms | Compilation ms | First execution ms |',
@@ -112,19 +147,33 @@ def plot(out,rows):
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     for field, ylabel, name, log in [
-        ('us_per_matvec','µs per matvec','matvec',True),
+        ('us_per_matvec','µs per call (100-call batch)','matvec',True),
         ('ms_per_batch','ms per 100 calls','batch',True),
         ('speedup','Speedup relative to one rank','scaling',False),
         ('dolfinx_over_backend','DOLFINx time / backend time','ratios',True)]:
-        fig,axes=plt.subplots(1,2,figsize=(10,4))
+        total_field = {'us_per_matvec':'total_amortized_us_per_matvec',
+                       'ms_per_batch':'total_ms_per_batch',
+                       'dolfinx_over_backend':'dolfinx_over_backend_total'}.get(field)
+        fig,axes=plt.subplots(1,2,figsize=(12,5.2 if total_field else 4.8))
         for ax,n in zip(axes,(46,99)):
-            for backend in BACKENDS:
+            for index,backend in enumerate(BACKENDS):
                 rr=[r for r in rows if r['subdivisions']==n and r['backend']==backend and field in r]
-                ax.plot([r['ranks'] for r in rr],[r[field] for r in rr],'o-',label=backend)
+                label = backend + (' · main' if total_field else '')
+                ax.plot([r['ranks'] for r in rr],[r[field] for r in rr],'o-',color=f'C{index}',label=label)
+                if total_field and backend != 'dolfinx':
+                    tt=[r for r in rr if total_field in r]
+                    ax.plot([r['ranks'] for r in tt],[r[total_field] for r in tt],
+                            's--',color=f'C{index}',label=backend+' · main + compilation')
             ax.set(title=f'{(n+1)**3:,} DoFs',xlabel='MPI ranks (CPU cores; also GPUs for JAX)',ylabel=ylabel,xticks=[1,2,3,4])
             if log: ax.set_yscale('log')
-            ax.grid(alpha=.2);ax.legend()
-        fig.tight_layout()
+            ax.grid(alpha=.2)
+            if not total_field: ax.legend(fontsize=8)
+        if total_field:
+            handles,labels=axes[0].get_legend_handles_labels()
+            fig.legend(handles,labels,loc='lower center',bbox_to_anchor=(.5,.045),ncol=3,fontsize=8)
+            fig.text(.5,.01,'Total = lowering + compilation + one warmed 100-call batch; first-execution startup excluded.',
+                     ha='center',fontsize=9)
+        fig.tight_layout(rect=(0,.18 if total_field else 0,1,1))
         for ext in ('png','pdf'):fig.savefig(out/f'{name}.{ext}',dpi=180)
         plt.close(fig)
     fig,axes=plt.subplots(2,2,figsize=(10,7))
