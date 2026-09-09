@@ -1,0 +1,27 @@
+{
+  "slides": 7,
+  "pdf_pages": 7,
+  "editable_shapes": 571,
+  "raster_images_in_pdf": 0,
+  "toy_result": [
+    0,
+    -1,
+    -2,
+    12
+  ],
+  "mesh_owned_counts": [
+    8,
+    4
+  ],
+  "mesh_ghost_counts": [
+    1,
+    2
+  ],
+  "padded_shard_shape": [
+    2,
+    9
+  ],
+  "text_geometry": "all text boxes and PDF spans within canvas",
+  "rendering": "PDF rendered from shared geometry; PowerPoint structure checked",
+  "runtime_semantics": "reviewed against existing source; no numerical backend modified"
+}
