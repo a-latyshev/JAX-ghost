@@ -13,4 +13,4 @@ set -euo pipefail
 # This is one driver, not eight MPI drivers. The worker steps request their
 # own task/GPU counts inside the allocation.
 python Jean-Zay/scale.py --ranks 1 2 4 8 --gpus-per-node 4 \
-  --launcher 'srun --nodes={nodes} --exact --ntasks={ranks} --gpus-per-task=1 --cpus-per-task=1 --cpu-bind=cores'
+  --launcher 'srun --nodes={nodes} --exact --ntasks={ranks} --gpus-per-node=4 --gpu-bind=none --cpus-per-task=1 --cpu-bind=cores'

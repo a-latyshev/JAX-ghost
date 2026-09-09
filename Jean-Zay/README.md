@@ -32,7 +32,7 @@ timeout 600 mpirun -n 2 --bind-to core python Jean-Zay/check.py
 With Slurm assigning one GPU to each task, use the site's supported MPI plugin:
 
 ```bash
-timeout 600 srun --exact --ntasks=2 --gpus-per-task=1 --cpus-per-task=1 \
+timeout 600 srun --exact --ntasks=2 --gpus-per-node=4 --gpu-bind=none --cpus-per-task=1 \
   --cpu-bind=cores python Jean-Zay/check.py
 ```
 
@@ -62,11 +62,16 @@ For Slurm (works within a single-node or multi-node GPU allocation):
 
 ```bash
 python Jean-Zay/scale.py --ranks 1 2 4 8 --gpus-per-node 4 \
-  --launcher 'srun --nodes={nodes} --exact --ntasks={ranks} --gpus-per-task=1 --cpus-per-task=1 --cpu-bind=cores'
+  --launcher 'srun --nodes={nodes} --exact --ntasks={ranks} --gpus-per-node=4 --gpu-bind=none --cpus-per-task=1 --cpu-bind=cores'
 ```
 
-Set `--gpus-per-node` to the number reserved on each node; `{nodes}` requests
-only the nodes needed for each point.
+Set both `--gpus-per-node` values to the number reserved on each node; `{nodes}`
+requests only the nodes needed for each point. `--gpu-bind=none` keeps the
+step’s allocated GPUs accessible for NCCL peer communication. The worker still
+selects one GPU per rank and checks distinct UUIDs and one local JAX device.
+On IRIS, per-task GPU isolation (`--gpus-per-task=1`) passed placement checks
+but failed at the first NCCL exchange with CUDA error 101; this step-level
+GPU allocation passed the 1/2/4-GPU batch smoke test.
 An editable [Slurm batch example](validation/slurm-example.sbatch) is included.
 Add the site's `--mpi=...` option if required. The quoted launcher is an argument
 list, not shell code. It must contain `{ranks}`. Adjust CPU cores per task if

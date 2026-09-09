@@ -81,3 +81,14 @@ The datasets and MPI metadata are validated at those rank counts; GPU execution
 must be checked on your collaborator's allocation. Slurm examples need the site's
 account, partition and supported MPI plugin. The full default three-launch,
 ten-batch production study is intended to run there.
+
+## Slurm batch launcher correction
+
+Job 5880927 on iris-185 passed n4 with one rank but failed with two ranks
+at the first NCCL all-to-all (CUDA error 101), after placement and compilation
+had succeeded. Job 5880983 on the same node passed n4 correctness and timing
+with 1, 2, and 4 ranks using `--gpus-per-node=4 --gpu-bind=none` instead of
+`--gpus-per-task=1`. One trial, one warmup, two batches of 100 calls; CSV and
+SVG generation also completed. Evidence: `results/sbatch-5880983/`. These are
+smoke timings, not production scaling measurements. Multi-node and partner-HPC
+execution remain unverified.

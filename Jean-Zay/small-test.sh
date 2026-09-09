@@ -20,6 +20,7 @@ export OMPI_MCA_pml=ob1
 export OMPI_MCA_btl=self,vader,tcp
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
 
+# Keep peer GPUs accessible to NCCL; placement.py selects one GPU per rank.
 python -u Jean-Zay/scale.py \
   --sizes 4 \
   --ranks 1 2 4 \
@@ -27,4 +28,4 @@ python -u Jean-Zay/scale.py \
   --gpus-per-node 4 \
   --timeout 120 \
   --output "Jean-Zay/results/sbatch-${SLURM_JOB_ID}" \
-  --launcher 'srun --nodes={nodes} --exact --ntasks={ranks} --gpus-per-task=1 --cpus-per-task=1 --cpu-bind=cores'
+  --launcher 'srun --nodes={nodes} --exact --ntasks={ranks} --gpus-per-node=4 --gpu-bind=none --cpus-per-task=1 --cpu-bind=cores'
