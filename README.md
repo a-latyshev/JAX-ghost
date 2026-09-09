@@ -128,3 +128,19 @@ Import `numpy as np` and `ShardedJAXGhost` from `jaxghost`. This backend uses
 padded `[owned | ghosts]` shards and native all-to-all; only forward INSERT is
 supported. See [sharded setup and validation](DOCUMENTATION.md#sharded-forward-backend)
 for the example, isolated tests, and macOS launcher workaround.
+
+Sharded scalar CSR matvec uses the same distributed initialization and mesh:
+
+```python
+from jaxghost import ShardedJAXMatrixCSR
+
+op = ShardedJAXMatrixCSR.from_dolfinx(A, comm, mesh)
+values = op.to_sharded(jnp.array(A.data[:op.nnz_owned], copy=True), kind="values")
+x = op.to_sharded(x_local, kind="x")
+y = op.to_sharded(y_local, kind="y")
+y = jax.jit(ShardedJAXMatrixCSR.mult)(op, values, x, y)
+y_local = op.local_array(y)
+```
+
+Run `python scripts/run_sharding_tests.py --matvec-example --ranks 2 4`
+(add `--local-cpu` for the documented single-host macOS workaround).

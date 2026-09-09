@@ -13,6 +13,7 @@ def main():
     parser.add_argument('--local-cpu', action='store_true',
                         help='single-host CPU validation with explicit loopback/Gloo binding')
     parser.add_argument('--example', action='store_true')
+    parser.add_argument('--matvec-example', action='store_true')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     sys.path[:0] = [str(root), str(root / 'src')]
@@ -44,7 +45,9 @@ def main():
         jax.distributed.initialize(cluster_detection_method='mpi4py', initialization_timeout=30)
     try:
         jax.config.update('jax_enable_x64', True)
-        if args.example:
+        if args.matvec_example:
+            runpy.run_path(str(root / 'examples/sharded_matvec.py'), run_name='__main__')
+        elif args.example:
             runpy.run_path(str(root / 'examples/sharded.py'), run_name='__main__')
         else:
             import pytest
