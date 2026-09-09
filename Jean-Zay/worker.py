@@ -5,6 +5,7 @@ import sys
 import traceback
 import os
 import numpy as np
+print("[Jean-Zay] Python started; importing MPI", file=sys.stderr, flush=True)
 from mpi4py import MPI
 from common import collective, load_fixture, check_result, environment, timings, write_json, sha256
 from placement import prepare
@@ -24,12 +25,17 @@ def main(check_only=False):
     p.add_argument('--repeats', type=int, default=10)
     a = p.parse_args()
     comm = MPI.COMM_WORLD
+    def progress(message):
+        if comm.rank == 0:
+            print(f"[Jean-Zay] {message}", file=sys.stderr, flush=True)
+    progress(f"MPI ready: {comm.size} ranks; loading fixture")
     if min(a.repeats, a.subdivisions) < 1 or a.warmup < 0 or a.trial < 0:
         raise ValueError('Invalid counts')
     if not check_only and a.output is None:
         raise ValueError('Timing requires --output FILE')
     folder = a.data/f'n{a.subdivisions}/{comm.size}ranks'
     meta, data, adapter = load_fixture(folder, comm)
+    progress("Fixture loaded; checking GPU and CPU placement")
     placements = prepare(comm)  # Mask and query CUDA before JAX initializes a backend.
     os.environ['JAX_PLATFORMS'] = 'cuda'
     os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
@@ -39,6 +45,7 @@ def main(check_only=False):
     from jaxghost import ShardedJAXMatrixCSR
     jax.config.update('jax_enable_x64', True)
     jax.config.update('jax_enable_compilation_cache', False)
+    progress('Placement checked; initializing distributed JAX')
     jax.distributed.initialize(cluster_detection_method='mpi4py', local_device_ids=[0], initialization_timeout=60)
     try:
         def devices():
@@ -46,6 +53,7 @@ def main(check_only=False):
             if device.platform != 'gpu' or jax.process_index() != comm.rank or jax.process_count() != comm.size or jax.device_count() != comm.size:
                 raise ValueError('MPI/JAX ranks or GPU count disagree')
             return device
+        progress("Distributed JAX initialized; checking devices and preparing matrix")
         device = collective(comm, devices)
         op = ShardedJAXMatrixCSR.from_dolfinx(adapter, comm, Mesh(np.asarray(jax.devices()), ('rank',)))
         local_x = data['x'].copy()
@@ -61,12 +69,14 @@ def main(check_only=False):
         def finish(v):
             v.block_until_ready()
             jax.effects_barrier()
+        progress("Matrix prepared; compiling matvec")
         mult = jax.jit(ShardedJAXMatrixCSR.mult)
         jax.block_until_ready(arrays)
         comm.Barrier()
         start = MPI.Wtime()
         mult.lower(op, values, x, zero).compile()
         compile_seconds = max(comm.allgather(MPI.Wtime()-start))
+        progress("Compilation finished; executing and validating matvecs")
         comm.Barrier()
         start = MPI.Wtime()
         result = mult(op, values, x, zero)
@@ -90,6 +100,7 @@ def main(check_only=False):
         validate(result,data['batch_expected'])
         samples = []
         if not check_only:
+            progress("Correctness checks passed; warming up and timing")
             result = zero
             for _ in range(a.warmup):
                 result = mult(op,values,x,result)

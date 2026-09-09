@@ -1,0 +1,153 @@
+{
+  "format_version": 1,
+  "created_utc": "2026-09-09T08:47:15.895536+00:00",
+  "fixtures": [
+    {
+      "path": "n4/1ranks",
+      "subdivisions": 4,
+      "ranks": 1,
+      "global_dofs": 125,
+      "fingerprints": [
+        "3950c8d9264f6476db3d5b3a7d43affea4ea492afb06a5e9d210a340e3d69313"
+      ]
+    },
+    {
+      "path": "n4/2ranks",
+      "subdivisions": 4,
+      "ranks": 2,
+      "global_dofs": 125,
+      "fingerprints": [
+        "8c4460571166594407ae852393db8915753643de4b8b1dc92b16e6a03765b76a",
+        "8c7e6db743d8d64d72a3ff0312a6a8525f91fc9b0f3675ccee73c3de4e4b2714"
+      ]
+    },
+    {
+      "path": "n4/3ranks",
+      "subdivisions": 4,
+      "ranks": 3,
+      "global_dofs": 125,
+      "fingerprints": [
+        "d0f72f96733a8a0d0379df89a71945ed5fd907a16a3ff51992adc0a24d785191",
+        "f1b24601ccb67ef4efbf5333bdb539cf342bd4c347abd83bdd0f070924d77874",
+        "8153f8da2e3cc7785672f0807aae87b9b1de88d958713b52c77037465b254c59"
+      ]
+    },
+    {
+      "path": "n4/4ranks",
+      "subdivisions": 4,
+      "ranks": 4,
+      "global_dofs": 125,
+      "fingerprints": [
+        "a41e27bf31a8f44b59e873f436784aeb19dc6195994d41178cf4bc1120b886f8",
+        "c7481df568eecaf654c533b63b8bb15b2aea4514687db8baccdc32b2dca9f0f1",
+        "09c5a24a53c1252f595f389abcb64f865cac47d293e240a2d24adbd944e6bd70",
+        "30f936c174ced103c72c1db79a9c684ded9536ef948d1fe36b4bcb41f29c71f8"
+      ]
+    },
+    {
+      "path": "n4/5ranks",
+      "subdivisions": 4,
+      "ranks": 5,
+      "global_dofs": 125,
+      "fingerprints": [
+        "4bbda10c39468d126ed7b57fc94fb9db7e7171f6f7b90673a1cd0b41ee4cf71d",
+        "c633fd5219b295a68106743b32996547a4946dd93426908dc0359a64c5edc0cb",
+        "8b2220d94b0b74d2cb40ea2cbe68156c69e9e2414ed4daf21dc11b7e7f1bbfbf",
+        "c1e6882d840d14306f236259ac56399582f2ed379bf20f9ef8ccbe3beb880783",
+        "39c1e19c3704fcd9f994c5b3ad28510bd1756ce49defdf6ff7bedd53f42fbb4a"
+      ]
+    },
+    {
+      "path": "n4/6ranks",
+      "subdivisions": 4,
+      "ranks": 6,
+      "global_dofs": 125,
+      "fingerprints": [
+        "cbfa87217358f5115956b664d075d96e324d5dd5f5d957e1ee49449b4ed2da43",
+        "0fca792410fab6b58e2e6c638cbedc58399a29bc277bfa22cb5b169242535590",
+        "81d19d3c5e13e2c85154bf51849681726b112ff1470bb37a56257d231d5245ab",
+        "7d305a65ce98a19b4a98db2ed4a087e3a03649f0f2271507030ed2743cf54aa6",
+        "084996893c089af707aea9c459754346e75ba3914898ce78ec5fddf80232d2bb",
+        "1a1743c939e0333acf795da21dbc644a73dd3989b6b4adc85b16da092c148fed"
+      ]
+    },
+    {
+      "path": "n4/7ranks",
+      "subdivisions": 4,
+      "ranks": 7,
+      "global_dofs": 125,
+      "fingerprints": [
+        "23ce265f0c5cd70bc195edf985a0af603bc3ffb8f3362c7895a16102873d3ae7",
+        "c842a9d63aabc9f6d090b66075fbd60c02c86c17f1e1b18138869b051048f63e",
+        "95c11171f6273d8185fe8a558eeb74ec4fe25e7a784e75a4072afe20f30cb59c",
+        "4b23022e39981056d2b1bb1dd9cd1ac5573f6569c5a1b0b370c28a771fa0c876",
+        "c6c5bd009035cabbc22d9d7151ad82454ecc6d45a12b578b402b7932a1927134",
+        "628a1b1fc55fedb623af0864ce2dde230033d0b94eb018606f60cbbf2ff308ae",
+        "c9ab8f5ea0397bc1eff465df223f4eca43f831d5f6dda99dde7317dce7ce38fc"
+      ]
+    },
+    {
+      "path": "n4/8ranks",
+      "subdivisions": 4,
+      "ranks": 8,
+      "global_dofs": 125,
+      "fingerprints": [
+        "9ac34e6877dcf95bcb76e268adce9450f8da8f81933c09bb7d8cb6c951e817da",
+        "73eb83d47281b69bb7a499701d209e41740bbeb60ab14aa269d732446df08224",
+        "2b47545fce07add52c31272cb7f36da42bcd56a40d01aa0c8431ce304e61f9af",
+        "4c5fc544a4a6a0377319b509f9f78a2bc52f344a481c647c4ff6dd5354e79955",
+        "8707948e5a7517d5a61fc164ebe285b209cc81b1e59dc258ed4fa4f859bed1c0",
+        "0bb3134613d24898c7fec25473f336f8dfcf0aed5f32edacfea100fcdc6183ba",
+        "7af9885a14d10935e7b1bab14d863b656d48d852c5ac1084fd4c0f15acfc21d3",
+        "5a40af0e5e64bec1179474dbf30a119dff366d0fc1bd927bd0c68f323c6312e3"
+      ]
+    },
+    {
+      "path": "n99/1ranks",
+      "subdivisions": 99,
+      "ranks": 1,
+      "global_dofs": 1000000,
+      "fingerprints": [
+        "e9b92623396e60634118b3b083ae4a4456a4d0c3601717e39cdf4810b251c9a0"
+      ]
+    },
+    {
+      "path": "n99/2ranks",
+      "subdivisions": 99,
+      "ranks": 2,
+      "global_dofs": 1000000,
+      "fingerprints": [
+        "9ce2d6672d813f581528a56d3a844a1f7a0b7dbe61fb0777c4cb09e8f953afbe",
+        "6dd4af9b9b22656352d11d222eaf4f0ff36b1cf5df1e52533a94ba58e597c1d2"
+      ]
+    },
+    {
+      "path": "n99/4ranks",
+      "subdivisions": 99,
+      "ranks": 4,
+      "global_dofs": 1000000,
+      "fingerprints": [
+        "60d757d225c41e85b732fda7677075ef6a4e26cf34e4b0ac9717704aa0ddfe27",
+        "5f06aaf58adf4aa719b30204990f69802063b524856ea715e7cbac10a097d903",
+        "30fccf1633a35861bccb29d3fffad6c34bf892ed7e1ee39689f8b1429e569c53",
+        "947d6df0bdb693338d3ce10ee52aad9dec2127b3eb29340a037a0a5258902b0e"
+      ]
+    },
+    {
+      "path": "n99/8ranks",
+      "subdivisions": 99,
+      "ranks": 8,
+      "global_dofs": 1000000,
+      "fingerprints": [
+        "728d8c21ef7a971fd2147e15bb74c85aa46fa28b53d1df6c1cfb79918dced796",
+        "61c14bbf145af9d2cb7ab1ca6421368f20aeedf8daa4a7d28b79806486306476",
+        "7f4e50d53344e243290f677de9b3574ee8b6c4602287a3cc2db1c126373850f9",
+        "87740e9547de35f5b46df246c6266e61070b06a4202474ea0ed9573b717bc456",
+        "db601e9ae088357ca092d25b37ec88ba757bf0bbf3f84824ff3744dca813814e",
+        "f2277753185e64c46934e9ae8b8589eb55b49a9500879d27f4897f78d6897879",
+        "9f88ece51fdf500d35e0bcf604c450a504a05eb550546440cc5f5d57ff724a3d",
+        "85ce240a6ba16e6842a8670974d67693f12bf268c0031108e5441368f6d6fb67"
+      ]
+    }
+  ]
+}

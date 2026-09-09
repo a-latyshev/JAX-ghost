@@ -1,1 +1,8 @@
 results/
+
+# Optional regenerated fixtures excluded from the compact distribution.
+/data/n46/
+/data/n99/3ranks/
+/data/n99/5ranks/
+/data/n99/6ranks/
+/data/n99/7ranks/

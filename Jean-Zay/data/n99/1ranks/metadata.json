@@ -1,0 +1,120 @@
+{
+  "format_version": 1,
+  "operator": "Poisson stiffness, no boundary conditions",
+  "dtype": "float64",
+  "rank_count": 1,
+  "subdivisions": 99,
+  "global_dofs": 1000000,
+  "global_cells": 5821794,
+  "settings": {
+    "warmup": 10,
+    "iterations": 100,
+    "repeats": 10
+  },
+  "dolfinx_version": "0.10.0.post4",
+  "environment": {
+    "python": "3.12.12",
+    "numpy": "2.3.4",
+    "mpi4py": "4.1.1",
+    "mpi_library": "Open MPI v4.1.6, package: Open MPI sw_builder@aion-0342 Distribution, ident: 4.1.6, repo rev: v4.1.6, Sep 30, 2023\u0000",
+    "ranks": [
+      {
+        "rank": 0,
+        "hostname": "iris-169",
+        "environment": {
+          "OMPI_MCA_plm_slurm_args": "--external-launcher",
+          "OMPI_MCA_orte_precondition_transports": "c57ef3cd2adf6d6d-8754cc6318ec61e7",
+          "OMPI_MCA_pml": "ob1",
+          "OMPI_MCA_btl": "self,vader,tcp",
+          "OMPI_MCA_ras": "^slurm",
+          "OMPI_MCA_hwloc_base_binding_policy": "core",
+          "OMPI_MCA_pmix": "^s1,s2,cray,isolated",
+          "SLURM_CPUS_ON_NODE": "28",
+          "CUDA_VISIBLE_DEVICES": "0,1,2,3",
+          "SLURM_JOB_ID": "5878288",
+          "OMP_NUM_THREADS": "1",
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "OMPI_MCA_orte_local_daemon_uri": "2557476864.0;tcp://172.17.6.169,172.19.6.169:54835",
+          "OMPI_MCA_orte_hnp_uri": "2557476864.0;tcp://172.17.6.169,172.19.6.169:54835",
+          "OMPI_MCA_mpi_oversubscribe": "0",
+          "OMPI_MCA_orte_app_num": "0",
+          "OMPI_MCA_orte_num_nodes": "1",
+          "OMPI_MCA_shmem_RUNTIME_QUERY_hint": "mmap",
+          "OMPI_MCA_orte_bound_at_launch": "1",
+          "OMPI_MCA_ess": "^singleton",
+          "OMPI_MCA_orte_ess_num_procs": "1",
+          "OMPI_MCA_orte_tmpdir_base": "/tmp",
+          "OMPI_MCA_orte_top_session_dir": "/tmp/ompi.iris-169.490151259",
+          "OMPI_MCA_orte_jobfam_session_dir": "/tmp/ompi.iris-169.490151259/pid.1528066",
+          "OMPI_MCA_initial_wdir": "/mnt/aiongpfs/users/alatyshev/JAX-ghost",
+          "OMPI_MCA_orte_launch": "1",
+          "OMPI_MCA_ess_base_jobid": "2557476865",
+          "OMPI_MCA_ess_base_vpid": "0",
+          "OMPI_MCA_orte_ess_node_rank": "0"
+        }
+      }
+    ]
+  },
+  "timing": {
+    "timer": "MPI.Wtime",
+    "rank_seconds": [
+      [
+        2.9814656889999966
+      ],
+      [
+        2.9188237390000005
+      ],
+      [
+        2.9794768299999994
+      ],
+      [
+        2.9155547089999985
+      ],
+      [
+        2.923322331999998
+      ],
+      [
+        2.9667880969999985
+      ],
+      [
+        2.9214715740000017
+      ],
+      [
+        2.9312846959999987
+      ],
+      [
+        2.9704982770000044
+      ],
+      [
+        2.923003985000001
+      ]
+    ],
+    "seconds_per_matvec": [
+      0.029814656889999968,
+      0.029188237390000003,
+      0.029794768299999993,
+      0.029155547089999984,
+      0.02923322331999998,
+      0.029667880969999984,
+      0.02921471574000002,
+      0.029312846959999986,
+      0.029704982770000044,
+      0.02923003985000001
+    ],
+    "median_seconds_per_matvec": 0.029273035139999983
+  },
+  "partitions": [
+    {
+      "rank": 0,
+      "owned_rows": 1000000,
+      "owned_cols": 1000000,
+      "ghost_rows": 0,
+      "ghost_cols": 0,
+      "nnz": 14761198
+    }
+  ],
+  "fingerprints": [
+    "e9b92623396e60634118b3b083ae4a4456a4d0c3601717e39cdf4810b251c9a0"
+  ]
+}
