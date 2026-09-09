@@ -1,13 +1,13 @@
 # From distributed FEM to JAX GPU ghost exchange
 
-Seven slides numbered **0–6**, in English, for a roughly ten-minute FEM/HPC talk.
+Eight slides numbered **0–7**, in English, for a roughly 11½-minute FEM/HPC talk.
 
 - [Editable PowerPoint](jax-ghost-presentation.pptx), including speaker notes.
 - [Vector PDF](jax-ghost-presentation.pdf), with the same slide content and layout.
 - [Speaker notes and references](speaker-notes.md), including timings and technical qualifications.
 - [Slide overview](overview.png); individual slide renders are in `previews/`.
 
-The slides use native PowerPoint text, shapes and lines. All 571 objects are
+The slides use native PowerPoint text, shapes and lines. All objects are
 editable; none of the diagrams is a screenshot. The PDF embeds its fonts and
 contains no raster images. The typography uses DejaVu Sans and DejaVu Sans Mono;
 the fonts and their redistribution license are included in `fonts/`. Install
@@ -51,15 +51,22 @@ semantics rather than claiming to reproduce a particular partitioner's output.
 The sharding slide reuses these exact local layouts, padded to shape `[2, 9]`.
 The four-DoF matrix is explicitly a separate algebraic toy.
 
+Slide 7 adds optimization opportunities from current JAX APIs: ragged exchange,
+donation and mutable Refs, and explicit communication for testing overlap.
+These are proposed experiments, not implemented optimizations or measured
+speedups. Speaker notes include constraints, sparse-kernel alternatives, Pallas,
+and links to the official JAX documentation. No particular environment upgrade
+or GPU capability is inferred from the supplied CPU capability audit.
+
 The generator checks:
 
 - The mesh ownership sets, ghost IDs, and padding counts.
 - The toy matrix result `[0, -1, -2, 12]` and the two local row calculations.
-- Seven slides and seven PDF pages, with notes embedded in every slide.
+- Eight slides and eight PDF pages, with notes embedded in every slide.
 - Complete text agreement between shared definitions, PowerPoint and PDF.
 - Text widths and page boundaries, and that the PDF contains vector content.
 
-All seven PDF pages were rendered and visually inspected. The PowerPoint was
+All eight PDF pages were rendered and visually inspected. The PowerPoint was
 reopened and its structure and text checked using `python-pptx`; a native
 PowerPoint/LibreOffice renderer was not available. The PDF is generated directly
 from the shared definitions, not exported by a PowerPoint application.

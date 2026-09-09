@@ -1,6 +1,6 @@
 # From distributed FEM to JAX GPU ghost exchange
 
-Seven slides, numbered 0–6. Target duration: 10 minutes.
+Eight slides, numbered 0–7. Target duration: 11½ minutes.
 
 ## Slide 0 — Finite elements → distributed algebra
 
@@ -154,7 +154,7 @@ Reference: https://mpi4jax.readthedocs.io/en/latest/installation.html
 
 ## Slide 6 — Explicit ghost exchange with JAX sharding
 
-Timing: 2:25. Total planned speaking time: 10:00.
+Timing: 2:25. Elapsed speaking time through this slide: 10:00.
 
 Reuse the twelve-vertex mesh's exact local order. Rank 0 has eight owned values
 and one ghost: nine entries. Rank 1 has four owned values and two ghosts: six
@@ -195,3 +195,78 @@ this sharded backend. Differentiation is outside the supported interface.
 Repository: ../src/jaxghost/sharded.py; ../src/jaxghost/sharded_matrix.py;
 ../datasets/test-sharded-gpu/results/matrix-timing-20260909T052640Z/REPORT.md.
 Reference: https://docs.jax.dev/en/latest/notebooks/shard_map.html
+
+## Slide 7 — Newer JAX APIs: optimization opportunities
+
+Timing: 1:30. Total planned speaking time with the extra slide: 11:30.
+
+This is a roadmap, not a report of optimizations already implemented. These
+are capabilities in current JAX documentation; they were not all introduced
+in the same release. The supplied audit reports small CPU probes on JAX 0.10.2,
+not complete GPU or transformation validation. We did not rerun those probes
+or change the numerical backend while preparing this slide. Check the actual
+JAX/jaxlib and GPU stack before each experiment.
+
+LESS PADDING. Our existing all-to-all allocates one maximum-width numerical
+packet per peer. The mini-diagram illustrates the same three useful values
+inside eight packet slots versus a packed representation; it is not a measured
+size reduction for the earlier two-rank mesh. ragged_all_to_all exchanges slices
+using counts and offsets, matching the DOLFINx-derived plan. Zero counts can
+represent non-neighbors. With our uniform shards, capacities remain fixed:
+use the maximum total outgoing count rather than rank count times the largest
+peer message. Metadata and vector/CSR padding remain. output_offsets specifies
+where each outgoing slice lands on its receiver, so receiver offsets must be
+exchanged during setup before unpacking into original ghost order. Validate
+GPU lowering and compare latency, not just payload size; the supplied audit's
+CPU probe could not compile this primitive.
+
+REUSE STORAGE. Donation is the smallest API experiment: permit reuse of the
+forward input x or matvec accumulator y when the caller relinquishes it. The
+donated input must not be reused afterward; memory reuse is an opportunity
+for the compiler, not a promised speedup. Keep the existing preserving API as
+the baseline. Mutable Refs offer a separate API with indexed writes to ghost
+or owned-output slots. Pass Refs explicitly into shard_map, rather than closing
+over them, and perform the indexed updates directly. Wrapping the existing
+full-vector functional update in a Ref will not automatically remove its
+temporaries. Current Ref documentation notes slower Python dispatch to impure
+JIT functions taking Ref inputs; benchmark against donated functional calls.
+
+OVERLAP. Split the local operator into owned-column and ghost-column parts.
+The timeline is a target: initiate the exchange, compute the owned-column part,
+then use received values for the ghost-column part. psend/precv expose separate
+send/receive operations; their GPU semantics map to NCCL communication. They
+are not interchangeable with MPI nonblocking begin/end. Matching permutations,
+fixed operand shapes, ordering and progress need testing. The supplied audit
+found no differentiation rule for psend; do not infer AD support from JIT
+support. Also compare ordinary collectives with independent computation and
+XLA latency-hiding / profile-guided scheduling. A GPU trace must show overlap.
+
+FOLLOW-UP. Profile local CSR separately: the current JAX sparse module is
+experimental and does not promise performance-critical suitability. Consider
+BCSR for batched vectors or gather-plus-segment-sum with cached row indices,
+keeping existing CSR as the baseline. Pallas/Mosaic GPU offers later kernel-
+level communication and computation integration. Its dense collective matmul
+example does not establish performance or hardware suitability for our
+irregular float64 CSR workload, including the GPUs used in this project.
+
+Suggested order: global no-communication fast path and donation; persistent
+Refs; GPU ragged exchange; profile local kernels; test overlap; specialized
+kernels only if warranted. The no-communication decision must be global:
+a rank with no local ghosts may still need to send to another rank. Retain the
+DOLFINx ownership and ghost ordering, and check correctness, memory and total
+matvec time for each candidate. Backend execution, JIT, batching and AD are
+separate properties to verify.
+
+References (official JAX documentation, checked for this slide):
+https://docs.jax.dev/en/latest/_autosummary/jax.lax.ragged_all_to_all.html
+https://docs.jax.dev/en/latest/buffer_donation.html
+https://docs.jax.dev/en/latest/array_refs.html
+https://docs.jax.dev/en/latest/_autosummary/jax.lax.psend.html
+https://docs.jax.dev/en/latest/_autosummary/jax.lax.precv.html
+https://docs.jax.dev/en/latest/gpu_performance_tips.html
+https://docs.jax.dev/en/latest/jax.experimental.sparse.html
+https://docs.jax.dev/en/latest/pallas/gpu/collective_matmul.html
+
+Repository baseline: ../src/jaxghost/sharded.py;
+../src/jaxghost/sharded_matrix.py. The user-supplied API audit informed the
+priorities; its probe outcomes are attributed above rather than revalidated.

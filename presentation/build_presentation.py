@@ -22,6 +22,7 @@ from reportlab.lib.colors import HexColor
 
 ROOT = Path(__file__).resolve().parent
 W, H, SCALE = 1280, 720, 0.75
+SLIDE_COUNT = 8
 INK, MUTED, LINE = '#172638', '#546477', '#D9E1EA'
 BLUE, ORANGE, TEAL = '#2463C9', '#C8531C', '#087D70'
 PALE_B, PALE_O, PALE_T = '#EFF5FF', '#FFF3EB', '#EDF8F5'
@@ -42,8 +43,8 @@ class Slide:
         self.text(56, 120, 1170, subtitle, 18, MUTED)
         self.line(56, 674, 1224, 674, LINE, 1)
         self.text(56, 688, 720, 'FEniCSx → MPI ownership → JAX GPU communication', 12, MUTED)
-        for i in range(7):
-            self.rect(1040 + i * 21, 694, 14, 4, TEAL if i == number else LINE)
+        for i in range(SLIDE_COUNT):
+            self.rect(1030 + i * 19, 694, 12, 4, TEAL if i == number else LINE)
         self.text(1200, 683, 24, str(number), 19, INK, bold=True, align='right')
 
     def add(self, kind, **kw):
@@ -477,7 +478,7 @@ Reference: https://mpi4jax.readthedocs.io/en/latest/installation.html
         s.arrow(x,545,x+21,545,TEAL,2)
     s.takeaway('Sharding places the arrays. Our plan defines which owner values fill which ghosts.',
                'Current scope: forward INSERT + scalar CSR matvec. Tradeoff: padding and a global all-to-all collective.')
-    s.notes = '''Timing: 2:25. Total planned speaking time: 10:00.
+    s.notes = '''Timing: 2:25. Elapsed speaking time through this slide: 10:00.
 
 Reuse the twelve-vertex mesh's exact local order. Rank 0 has eight owned values
 and one ghost: nine entries. Rank 1 has four owned values and two ghosts: six
@@ -518,6 +519,117 @@ this sharded backend. Differentiation is outside the supported interface.
 Repository: ../src/jaxghost/sharded.py; ../src/jaxghost/sharded_matrix.py;
 ../datasets/test-sharded-gpu/results/matrix-timing-20260909T052640Z/REPORT.md.
 Reference: https://docs.jax.dev/en/latest/notebooks/shard_map.html
+'''
+    out.append(s)
+    s = Slide(7, 'Newer JAX APIs: optimization opportunities', 'What to try next',
+              'Candidates for our sharded implementation • preserve the ownership map • benchmark on the target GPUs')
+    for x, title, col, fill in [(56, 'Less packet padding', BLUE, PALE_B),
+                                (456, 'Reuse device storage', TEAL, PALE_T),
+                                (857, 'Overlap useful work', ORANGE, PALE_O)]:
+        s.rect(x, 181, 367, 346, fill, LINE, 1, radius=10)
+        s.text(x+20, 200, 327, title, 23, col, bold=True)
+    s.text(76, 249, 327, 'lax.ragged_all_to_all', 20, BLUE, font='mono')
+    s.text(76, 294, 327, 'Fixed peer packets', 16, MUTED)
+    for i in range(8):
+        s.rect(76+i*34, 321, 28, 22, BLUE if i in [0,4,5] else WHITE,
+               BLUE if i in [0,4,5] else LINE, 1)
+    s.arrow(365, 330, 365, 375, BLUE, 2, head=8)
+    s.text(76, 361, 280, 'Packed values + counts / offsets', 16, MUTED)
+    for i in range(3):
+        s.rect(76+i*34, 389, 28, 22, BLUE)
+    s.text(76, 440, 327, 'Send variable-length slices.\nKeep fixed buffer capacities;\nvector / CSR padding remains.', 18, INK)
+
+    s.text(476, 249, 327, 'donate_argnums / jax.new_ref', 18, TEAL, font='mono')
+    vector(s, 491, 316, ['1','2','4'], [0,0,1], ghosts=[2], cell=62, fs=22)
+    s.text(688, 325, 112, '← write', 18, ORANGE, bold=True)
+    s.text(476, 382, 327, 'Reuse buffers or write ghost slots.', 17, MUTED)
+    s.text(476, 440, 327, 'Donation consumes the input.\nRefs enable explicit mutation.\nMeasure memory + dispatch cost.', 18, INK)
+
+    s.text(877, 249, 327, 'lax.psend / lax.precv', 20, ORANGE, font='mono')
+    s.text(877, 294, 327, 'Target schedule — verify in a trace', 16, MUTED)
+    s.rect(877, 327, 235, 28, ORANGE, radius=4)
+    s.text(885, 331, 216, 'communicate ghost values', 14, WHITE, bold=True, align='center')
+    s.rect(877, 370, 192, 28, BLUE, radius=4)
+    s.text(884, 374, 177, 'owned-column part', 14, WHITE, bold=True, align='center')
+    s.rect(1119, 370, 84, 28, ORANGE, radius=4)
+    s.text(1123, 374, 76, 'ghosts', 14, WHITE, bold=True, align='center')
+    s.arrow(1112, 341, 1126, 366, ORANGE, 1.5, head=6)
+    s.text(877, 440, 327, 'Split owned / ghost-column work.\nTest scheduling and GPU progress.\nMPI-style overlap is not automatic.', 18, INK)
+    s.text(57, 548, 1165, 'Also profile local CSR alternatives; consider Pallas fusion only for a measured kernel bottleneck.', 19, MUTED)
+    s.takeaway('First test storage reuse and ragged exchange; measure end-to-end matvec before choosing.',
+               'Optimization candidates, not measured speedups. Verify GPU execution, numerical results and required JAX transforms.')
+    s.notes = '''Timing: 1:30. Total planned speaking time with the extra slide: 11:30.
+
+This is a roadmap, not a report of optimizations already implemented. These
+are capabilities in current JAX documentation; they were not all introduced
+in the same release. The supplied audit reports small CPU probes on JAX 0.10.2,
+not complete GPU or transformation validation. We did not rerun those probes
+or change the numerical backend while preparing this slide. Check the actual
+JAX/jaxlib and GPU stack before each experiment.
+
+LESS PADDING. Our existing all-to-all allocates one maximum-width numerical
+packet per peer. The mini-diagram illustrates the same three useful values
+inside eight packet slots versus a packed representation; it is not a measured
+size reduction for the earlier two-rank mesh. ragged_all_to_all exchanges slices
+using counts and offsets, matching the DOLFINx-derived plan. Zero counts can
+represent non-neighbors. With our uniform shards, capacities remain fixed:
+use the maximum total outgoing count rather than rank count times the largest
+peer message. Metadata and vector/CSR padding remain. output_offsets specifies
+where each outgoing slice lands on its receiver, so receiver offsets must be
+exchanged during setup before unpacking into original ghost order. Validate
+GPU lowering and compare latency, not just payload size; the supplied audit's
+CPU probe could not compile this primitive.
+
+REUSE STORAGE. Donation is the smallest API experiment: permit reuse of the
+forward input x or matvec accumulator y when the caller relinquishes it. The
+donated input must not be reused afterward; memory reuse is an opportunity
+for the compiler, not a promised speedup. Keep the existing preserving API as
+the baseline. Mutable Refs offer a separate API with indexed writes to ghost
+or owned-output slots. Pass Refs explicitly into shard_map, rather than closing
+over them, and perform the indexed updates directly. Wrapping the existing
+full-vector functional update in a Ref will not automatically remove its
+temporaries. Current Ref documentation notes slower Python dispatch to impure
+JIT functions taking Ref inputs; benchmark against donated functional calls.
+
+OVERLAP. Split the local operator into owned-column and ghost-column parts.
+The timeline is a target: initiate the exchange, compute the owned-column part,
+then use received values for the ghost-column part. psend/precv expose separate
+send/receive operations; their GPU semantics map to NCCL communication. They
+are not interchangeable with MPI nonblocking begin/end. Matching permutations,
+fixed operand shapes, ordering and progress need testing. The supplied audit
+found no differentiation rule for psend; do not infer AD support from JIT
+support. Also compare ordinary collectives with independent computation and
+XLA latency-hiding / profile-guided scheduling. A GPU trace must show overlap.
+
+FOLLOW-UP. Profile local CSR separately: the current JAX sparse module is
+experimental and does not promise performance-critical suitability. Consider
+BCSR for batched vectors or gather-plus-segment-sum with cached row indices,
+keeping existing CSR as the baseline. Pallas/Mosaic GPU offers later kernel-
+level communication and computation integration. Its dense collective matmul
+example does not establish performance or hardware suitability for our
+irregular float64 CSR workload, including the GPUs used in this project.
+
+Suggested order: global no-communication fast path and donation; persistent
+Refs; GPU ragged exchange; profile local kernels; test overlap; specialized
+kernels only if warranted. The no-communication decision must be global:
+a rank with no local ghosts may still need to send to another rank. Retain the
+DOLFINx ownership and ghost ordering, and check correctness, memory and total
+matvec time for each candidate. Backend execution, JIT, batching and AD are
+separate properties to verify.
+
+References (official JAX documentation, checked for this slide):
+https://docs.jax.dev/en/latest/_autosummary/jax.lax.ragged_all_to_all.html
+https://docs.jax.dev/en/latest/buffer_donation.html
+https://docs.jax.dev/en/latest/array_refs.html
+https://docs.jax.dev/en/latest/_autosummary/jax.lax.psend.html
+https://docs.jax.dev/en/latest/_autosummary/jax.lax.precv.html
+https://docs.jax.dev/en/latest/gpu_performance_tips.html
+https://docs.jax.dev/en/latest/jax.experimental.sparse.html
+https://docs.jax.dev/en/latest/pallas/gpu/collective_matmul.html
+
+Repository baseline: ../src/jaxghost/sharded.py;
+../src/jaxghost/sharded_matrix.py. The user-supplied API audit informed the
+priorities; its probe outcomes are attributed above rather than revalidated.
 '''
     out.append(s)
     return out
@@ -637,7 +749,7 @@ def validate_and_preview(deck, pptx_path, pdf_path):
     assert -local0[0]+2*local0[1]-local0[2]==-1
     assert -local1[2]+2*local1[0]-local1[1]==-2
     prs=Presentation(pptx_path); doc=fitz.open(pdf_path)
-    assert len(prs.slides)==len(doc)==len(deck)==7
+    assert len(prs.slides)==len(doc)==len(deck)==SLIDE_COUNT
     for i,(d,ps,page) in enumerate(zip(deck,prs.slides,doc)):
         assert len(ps.shapes)==len(d.objects)
         expected_text=[o['text'] for o in d.objects if o['kind']=='text']
@@ -660,7 +772,7 @@ def validate_and_preview(deck, pptx_path, pdf_path):
                     assert xx>=0 and yy>=0 and xx2<=W*SCALE+1 and yy2<=H*SCALE+1, sp
         assert str(i) in page.get_text()
     previews=ROOT/'previews'; previews.mkdir(exist_ok=True)
-    contact=Image.new('RGB',(1280,4*385),'#E5EAF0')
+    contact=Image.new('RGB',(1280,math.ceil(len(deck)/2)*385),'#E5EAF0')
     draw=ImageDraw.Draw(contact)
     for i,p in enumerate(doc):
         pix=p.get_pixmap(matrix=fitz.Matrix(1.6,1.6),alpha=False)
@@ -671,7 +783,7 @@ def validate_and_preview(deck, pptx_path, pdf_path):
         draw.text((xx,yy+348),f'SLIDE {i}  /  {deck[i].title}',fill=INK,
                   font=ImageFont.truetype(str(FONTS/'DejaVuSans.ttf'),11))
     contact.save(ROOT/'overview.png')
-    return {'slides':7,'pdf_pages':7,'editable_shapes':sum(len(s.shapes) for s in prs.slides),
+    return {'slides':len(deck),'pdf_pages':len(doc),'editable_shapes':sum(len(s.shapes) for s in prs.slides),
             'raster_images_in_pdf':0,'toy_result':y,'mesh_owned_counts':[8,4],
             'mesh_ghost_counts':[1,2],'padded_shard_shape':[2,9],
             'text_geometry':'all text boxes and PDF spans within canvas',
@@ -685,7 +797,7 @@ def main():
     pdf_path=ROOT/'jax-ghost-presentation.pdf'
     pptx_render(deck,pptx_path); pdf_render(deck,pdf_path)
     (ROOT/'speaker-notes.md').write_text('# From distributed FEM to JAX GPU ghost exchange\n\n'
-        'Seven slides, numbered 0–6. Target duration: 10 minutes.\n\n'
+        'Eight slides, numbered 0–7. Target duration: 11½ minutes.\n\n'
         + '\n\n'.join(f'## Slide {s.number} — {s.title}\n\n{s.notes.strip()}' for s in deck)+'\n')
     report=validate_and_preview(deck,pptx_path,pdf_path)
     (ROOT/'validation.json').write_text(json.dumps(report,indent=2)+'\n')
