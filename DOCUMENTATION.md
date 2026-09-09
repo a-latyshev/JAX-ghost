@@ -596,8 +596,8 @@ are local; the caller must execute matching operations on every process.
 Each local communication buffer has shape `(nranks, max_message_length)`, with
 message length at least one. This deliberately simple baseline pads missing
 peers and unequal messages. It does not claim lower communication cost than the
-existing peer-based backend. Reverse scatter, AD, sparse matvec integration,
-GPU validation and neighbor-permutation schedules are deferred.
+existing peer-based backend. Reverse scatter, AD, GPU validation and
+neighbor-permutation schedules are deferred. Scalar CSR integration is described below.
 
 ### Launch and test
 
@@ -641,3 +641,46 @@ FI_PROVIDER=tcp FI_TCP_IFACE=en0 python scripts/run_sharding_tests.py --local-cp
 FI_PROVIDER/FI_TCP_IFACE configure mpi4py's MPICH setup transport, not JAX's
 native all-to-all. Distributed tests must pass before claiming support on a new
 machine; single-process multiple-device tests are not equivalent evidence.
+
+
+## Sharded scalar CSR matvec
+
+`ShardedJAXMatrixCSR` follows `MatrixCSR::mult` in DOLFINx C++: use the matrix
+column IndexMap to refresh input ghosts, then accumulate into owned output rows.
+This version completes the native JAX exchange before CSR computation; DOLFINx
+instead overlaps that exchange with its owned-column contribution.
+
+The data flow is local JAX coefficients/x/y → on-device padding and global sharded
+array construction → column ghost forward update → local sparse CSR matvec →
+add to owned y → unpadded local JAX output view. Host transfers in the example
+are explicit initialization and validation only. Input x, coefficients, y,
+output ghosts and output padding are preserved.
+
+Global buffers have shape `(nranks, width)`, sharded along `rank`. Values are
+padded to the maximum owned-row nonzero count; x and y use separate column and
+row layout widths. CSR row pointers are padded with the last pointer, making
+extra rows empty. All ranks execute a uniform kernel, including ranks with no
+owned rows or nonzeros. A dynamic mask preserves non-owned output slots.
+Rank-specific CSR indices, pointers and masks are sharded pytree leaves; pass
+the operator explicitly to JIT. Coefficients can change without rebuilding the
+plan, provided sparsity and dtype remain compatible. `sparse.CSR` describes the
+local padded operands during tracing; no DOLFINx matrix is reconstructed during
+execution. Padding increases storage; no performance improvement is claimed.
+
+Only scalar float32/float64 matrices are supported. Assembly must be finalized
+before transferring coefficients. There is no MPI runtime communicator or close
+operation; distributed JAX initialization/shutdown remains caller-owned. Reverse,
+transpose, differentiation, blocked CSR and GPU validation remain separate work.
+
+The isolated sharding suite includes DOLFINx mass-plus-diffusion comparisons in
+eager/JIT execution at both precisions, changed coefficients, stale input ghosts,
+nonzero output, input/ghost/padding preservation, and a synthetic rectangular
+case with asymmetric exchange, empty rows and empty ranks, plus all-empty layouts.
+Use `python scripts/run_sharding_tests.py --local-cpu` on the tested macOS setup.
+The standalone example is `python scripts/run_sharding_tests.py --local-cpu
+--matvec-example --ranks 2 4` (one shell line).
+
+Validated on CPU with JAX/jaxlib 0.10.2 and DOLFINx 0.11.0: all 10 sharding
+checks passed on 1–4 MPI ranks, and the example passed on 2 and 4 ranks with
+maximum absolute error below 1.8e-14 against DOLFINx. The opt-in loopback/Gloo
+launcher was used; this does not establish GPU compatibility or performance.

@@ -18,8 +18,8 @@ fixed scalar/vector/tensor blocks, JIT execution, and CPU correctness tests.
 6. [ ] Nonlinear residuals and Jacobian-vector products; distinguish local-kernel
    differentiation from differentiation through distributed communication.
 7. [ ] Optional distributed-vector wrapper and further sharded-backend work.
-   Forward INSERT via padded native JAX all-to-all is implemented; reverse ADD,
-   AD validation, neighbor permutations, CSR integration and GPU measurements
+   Forward INSERT and scalar CSR matvec via padded native JAX all-to-all are implemented; reverse ADD,
+   AD validation, neighbor permutations and GPU measurements
    remain future work. Evaluate padding and communication costs.
 
 Communication/computation overlap is a later optimization: first benchmark the

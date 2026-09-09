@@ -126,3 +126,74 @@ def test_validation():
         replicated = jax.device_put(np.zeros(x.shape, dtype=np.float32), NamedSharding(MESH, P()))
         with pytest.raises(ValueError, match='sharding'):
             ghost.scatter_forward(replicated)
+
+
+def test_sharded_matrix():
+    from dolfinx import la
+    from examples.matvec import create_matrix
+    from jaxghost import ShardedJAXMatrixCSR
+    for dtype in (np.float32, np.float64):
+        A = create_matrix(COMM, dtype)
+        op = ShardedJAXMatrixCSR.from_dolfinx(A, COMM, MESH)
+        baseline = A.data.copy()
+        ids = np.arange(*A.index_map(1).local_range)
+        for compiled in (False, True):
+            mult = jax.jit(ShardedJAXMatrixCSR.mult) if compiled else ShardedJAXMatrixCSR.mult
+            for scale in (1, 2):
+                A.data[:] = baseline * scale
+                xr = la.vector(A.index_map(1), dtype=dtype)
+                yr = la.vector(A.index_map(0), dtype=dtype)
+                xr.array[:] = np.nan
+                xr.array[:op.n_owned_cols] = 10 + ids
+                yr.array[:] = 3
+                args = [op.to_sharded(jnp.asarray(a), kind=k) for a, k in
+                        ((A.data[:op.nnz_owned].copy(), 'values'), (xr.array.copy(), 'x'), (yr.array.copy(), 'y'))]
+                # Nonzero padding must survive the matvec.
+                piece = args[2].addressable_shards[0].data.at[:, len(yr.array):].set(-987)
+                args[2] = jax.make_array_from_single_device_arrays(args[2].shape, args[2].sharding, [piece])
+                before = [np.asarray(a.addressable_shards[0].data).copy() for a in args]
+                result = mult(op, *args)
+                result.block_until_ready()
+                A.mult(xr, yr)
+                actual = np.asarray(op.local_array(result))
+                tol = 64*np.finfo(dtype).eps
+                assert COMM.allreduce(bool(np.allclose(actual, yr.array, rtol=tol, atol=tol)), op=MPI.LAND)
+                assert_equal(actual[op.n_owned_rows:], before[2][0, op.n_owned_rows:len(yr.array)])
+                assert_equal(np.asarray(result.addressable_shards[0].data)[0, len(yr.array):], before[2][0, len(yr.array):])
+                for a, b in zip(args, before):
+                    assert_equal(np.asarray(a.addressable_shards[0].data), b)
+                assert op.local_array(result).devices() == {jax.local_devices()[0]}
+        with pytest.raises(TypeError, match='matching'):
+            op.mult(args[0].astype(jnp.float64), args[1].astype(jnp.float32), args[2])
+        with pytest.raises(ValueError, match='shape'):
+            op.mult(args[0][:, :, None], *args[1:])
+        with pytest.raises(TypeError, match='float32'):
+            op.mult(args[0].astype(jnp.int32), *args[1:])
+        with pytest.raises(TypeError, match='JAX'):
+            op.to_sharded(np.zeros(op.nnz_owned), kind='values')
+        bad = SimpleNamespace(block_size=[2, 2])
+        with pytest.raises(ValueError, match='block sizes'):
+            ShardedJAXMatrixCSR.from_dolfinx(bad, COMM, MESH)
+
+
+@pytest.mark.parametrize('empty', (False, True))
+def test_sharded_matrix_rectangular(empty):
+    from jaxghost import ShardedJAXMatrixCSR
+    cmap = layout('all_empty' if empty else 'one_way')
+    nr = 0 if empty or COMM.rank == 0 else COMM.rank + 1
+    rows = SimpleNamespace(size_local=nr, ghosts=np.array([0] if not empty else [], dtype=np.int64))
+    col = np.array([cmap.size_local] if nr else [], dtype=np.int32)
+    ptr = np.array([0] + [len(col)]*nr, dtype=np.int32)
+    A = SimpleNamespace(block_size=[1, 1], index_map=lambda i: (rows, cmap)[i], indptr=ptr, indices=col)
+    op = ShardedJAXMatrixCSR.from_dolfinx(A, COMM, MESH)
+    local_x = jnp.full((op.n_owned_cols+op.n_ghost_cols,), jnp.nan)
+    local_x = local_x.at[:op.n_owned_cols].set(10+jnp.arange(*cmap.local_range))
+    v = op.to_sharded(jnp.full((op.nnz_owned,), 2.), kind='values')
+    x = op.to_sharded(local_x, kind='x')
+    y = op.to_sharded(jnp.full((nr+op.n_ghost_rows,), 3.), kind='y')
+    result = jax.jit(ShardedJAXMatrixCSR.mult)(op, v, x, y)
+    result.block_until_ready()
+    expected = np.full((nr+op.n_ghost_rows,), 3.)
+    if nr:
+        expected[0] += 2*(10+cmap.ghosts[0])
+    assert_equal(np.asarray(op.local_array(result)), expected)

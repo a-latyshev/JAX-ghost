@@ -15,6 +15,7 @@ def main():
     parser.add_argument('--timeout', type=float, default=120)
     parser.add_argument('--local-cpu', action='store_true')
     parser.add_argument('--example', action='store_true')
+    parser.add_argument('--matvec-example', action='store_true')
     args = parser.parse_args()
     env = os.environ.copy()
     env['JAX_PLATFORMS'] = 'cpu'
@@ -29,6 +30,7 @@ def main():
         command = [args.mpirun, '-n', str(n), sys.executable, '-u', 'scripts/sharding_worker.py']
         command += ['--local-cpu'] if args.local_cpu else []
         command += ['--example'] if args.example else []
+        command += ['--matvec-example'] if args.matvec_example else []
         print('Running:', ' '.join(command), flush=True)
         proc = subprocess.Popen(command, cwd=root, env=env, start_new_session=True)
         try:
