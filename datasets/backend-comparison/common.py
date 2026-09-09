@@ -122,8 +122,9 @@ def placement(comm, backend, device=None):
     record = dict(rank=comm.rank, hostname=platform.node(), cpu_affinity=affinity,
                   physical_cores=sorted(set(physical)), gpu_uuid=None)
     error = None
-    if len(affinity) != 1 or len(set(physical)) != 1:
-        error = 'Each rank must be bound to exactly one hardware thread of one physical core'
+    expected = 1 if backend == 'dolfinx' else int(os.environ.get('BENCH_JAX_CPUS_PER_RANK', '1'))
+    if len(affinity) != expected or len(set(physical)) != expected:
+        error = f'Each rank must be bound to {expected} distinct physical cores (one hardware thread each)'
     if backend != 'dolfinx':
         visible = os.environ.get('CUDA_VISIBLE_DEVICES', '')
         if not visible or ',' in visible or device is None or device.platform != 'gpu':

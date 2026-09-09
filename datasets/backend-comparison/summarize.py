@@ -48,7 +48,9 @@ def summarize(out):
         med = st.median(max(s)/d['settings']['iterations'] for s in samples)
         assert abs(med-d['timing']['median_seconds_per_matvec']) < 1e-12
         assert len(d['placement']) == d['ranks']
-        assert [p['cpu_affinity'] for p in d['placement']] == [[c] for c in manifest['cpu_ids'][:d['ranks']]]
+        expected_cpus = ([[c] for c in manifest['cpu_ids']] if d['backend']=='dolfinx'
+                         else manifest.get('jax_cpu_sets', [[c] for c in manifest['cpu_ids']]))
+        assert [p['cpu_affinity'] for p in d['placement']] == expected_cpus[:d['ranks']]
         assert all(p['hostname'] == manifest['hostname'] for p in d['placement'])
         gpus = [p['gpu_uuid'] for p in d['placement']]
         assert gpus == ([None]*d['ranks'] if d['backend']=='dolfinx' else manifest['gpu_uuids'][:d['ranks']])
@@ -66,12 +68,13 @@ def summarize(out):
             assert jax[0]['versions']['jaxlib'] == jax[1]['versions']['jaxlib']
         audit.append(dict(subdivisions=key[0],ranks=key[1],trial=key[2],backends=[d['backend'] for d in group],matched=True))
     (out/'audit.json').write_text(json.dumps(audit,indent=2)+'\n')
+    baseline_ranks = min(manifest['settings']['ranks'])
     rows = []
     for n in manifest['settings']['sizes']:
         for p in manifest['settings']['ranks']:
             for backend in BACKENDS:
                 group = [d for d in records if not d['smoke'] and d['subdivisions']==n and d['ranks']==p and d['backend']==backend]
-                row = dict(subdivisions=n,dofs=(n+1)**3,ranks=p,backend=backend,cpus=p,
+                row = dict(subdivisions=n,dofs=(n+1)**3,ranks=p,backend=backend,cpus=p*(1 if backend=='dolfinx' else manifest.get('jax_cpus_per_rank',1)),
                            gpus=0 if backend=='dolfinx' else p,successful_trials=len(group),
                            status='complete' if len(group)==manifest['settings']['trials'] else 'incomplete')
                 if group:
@@ -89,10 +92,11 @@ def summarize(out):
                 rows.append(row)
     for r in rows:
         if r['status'] != 'complete': continue
-        base = next(x for x in rows if x['subdivisions']==r['subdivisions'] and x['backend']==r['backend'] and x['ranks']==1)
+        base = next(x for x in rows if x['subdivisions']==r['subdivisions'] and x['backend']==r['backend'] and x['ranks']==baseline_ranks)
         if base['status'] == 'complete':
             r['speedup'] = base['us_per_matvec']/r['us_per_matvec']
-            r['efficiency'] = r['speedup']/r['ranks']
+            r['efficiency'] = baseline_ranks*r['speedup']/r['ranks']
+            r['scaling_baseline_ranks'] = baseline_ranks
         for other, name in [('dolfinx','dolfinx_over_backend'),('mpi4jax','mpi4jax_over_backend')]:
             b = next(x for x in rows if x['subdivisions']==r['subdivisions'] and x['backend']==other and x['ranks']==r['ranks'])
             if b['status'] == 'complete':
@@ -102,15 +106,16 @@ def summarize(out):
     with (out/'summary.csv').open('w') as f:
         writer=csv.DictWriter(f,fieldnames=fields);writer.writeheader();writer.writerows(rows)
     lines=['# Matvec backend comparison','',
-        f"Allocation {manifest['job']} on {manifest['hostname']}. One physical CPU core per rank; JAX additionally uses one distinct GPU per rank.",
+        f"Allocation {manifest['job']} on {manifest['hostname']}. DOLFINx: one physical CPU core per rank. JAX: {manifest.get('jax_cpus_per_rank',1)} physical CPU cores and one distinct GPU per rank.",
+        ('DOLFINx measurements and fixtures are reused unchanged from '+manifest['baseline']+'. Only JAX was rerun.' if manifest.get('baseline') else 'All backends were measured in this campaign.'),
         '', 'Float64 3D Poisson; fixed A and x; 100 Python-driven `y += A*x` calls per batch, including halo exchange. No outer-loop JIT.',
         'MPI.Wtime measures maximum rank elapsed time, including final GPU/effect synchronization. Setup, compilation, uploads, resets, validation and I/O are excluded.',
         'Ten warmups and ten batches per launch; three fresh launches per configuration. Times below are median launch medians.', '',
-        '| DoFs | Ranks | Backend | CPU cores | GPUs | Trials | µs/matvec | ms/100 calls | Speedup vs 1 rank |',
+        f'| DoFs | Ranks | Backend | CPU cores | GPUs | Trials | µs/matvec | ms/100 calls | Speedup vs {baseline_ranks} ranks |',
         '| ---: | ---: | :--- | ---: | ---: | ---: | ---: | ---: | ---: |']
     for r in rows:
         value = lambda k: f'{r[k]:.2f}' if k in r and r['status']=='complete' else '—'
-        lines.append(f"| {r['dofs']:,} | {r['ranks']} | {r['backend']} | {r['cpus']} | {r['gpus']} | {r['successful_trials']}/3 | {value('us_per_matvec')} | {value('ms_per_batch')} | {value('speedup')} |")
+        lines.append(f"| {r['dofs']:,} | {r['ranks']} | {r['backend']} | {r['cpus']} | {r['gpus']} | {r['successful_trials']}/{manifest['settings']['trials']} | {value('us_per_matvec')} | {value('ms_per_batch')} | {value('speedup')} |")
     lines += ['', '## Compilation plus one 100-call batch', '',
         'Derived total = tracing/lowering + compilation + one warmed 100-call batch. DOLFINx has no JAX compilation cost, so its total equals its batch time. First-execution startup, assembly, uploads, warmups and other setup remain excluded; this is not a measured cold-run wall time.',
         'Costs are added within each launch before taking the median across launches. Each separately timed compilation phase uses its maximum rank duration. Dashed curves add these totals to the runtime and DOLFINx-ratio plots; the per-call plot divides the total by 100.', '',
@@ -131,31 +136,35 @@ def summarize(out):
         'Successful paired launches passed exact fixture fingerprints, CPU/GPU placement and JAX-version checks; timing medians were recomputed from raw rank durations. Numerical checks use global owned-entry L2 error <= 1e-12 + 1e-10 * reference norm.',
         'DOLFINx refreshes input ghosts in place. JAX preserves inputs. DOLFINx overlaps halo exchange with local work; sharding retains its existing padded representation and collective implementation. These backend behaviors are included.',
         'Both JAX backends have the same host-core allowance and GPU assignment. They use different installed MPI/runtime stacks; this is a comparison of those stacks, not hardware-independent backend efficiency.',
-        'DOLFINx runs first to produce each trial fixture; JAX launch order alternates by trial. Partial configurations are retained in CSV but excluded from comparisons and plots.', '', '## Launch failures', '']
+        'DOLFINx fixtures are produced before JAX replay; JAX launch order alternates by trial. Partial configurations are retained in CSV but excluded from comparisons and plots.', '', '## Launch failures', '']
     failed = [x for x in launches if x.get('exit_code') != 0]
     lines += [f"- {x['name']}: exit={x.get('exit_code')}; {x.get('skipped_reason',x.get('log',''))}" for x in failed] or ['None.']
     lines += ['', 'Raw records: `raw/`; fixture data: `fixtures/`; placement/source manifest: `manifest.json`; every launch and failure: `launches.json`.', '']
     (out/'REPORT.md').write_text('\n'.join(lines))
     complete = [r for r in rows if r['status']=='complete']
     if complete:
-        plot(out,complete)
+        plot(out,complete,manifest.get('jax_cpus_per_rank',1), manifest['settings']['sizes'], manifest['settings']['ranks'])
     print(out/'REPORT.md')
 
 
-def plot(out,rows):
+def plot(out,rows,jax_cpus=1,sizes=None,ranks=None):
+    sizes = sorted(sizes or {r['subdivisions'] for r in rows})
+    ranks = sorted(ranks or {r['ranks'] for r in rows})
+    baseline_ranks = min(ranks)
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     for field, ylabel, name, log in [
         ('us_per_matvec','µs per call (100-call batch)','matvec',True),
         ('ms_per_batch','ms per 100 calls','batch',True),
-        ('speedup','Speedup relative to one rank','scaling',False),
+        ('speedup',f'Speedup relative to {baseline_ranks} ranks','scaling',False),
         ('dolfinx_over_backend','DOLFINx time / backend time','ratios',True)]:
         total_field = {'us_per_matvec':'total_amortized_us_per_matvec',
                        'ms_per_batch':'total_ms_per_batch',
                        'dolfinx_over_backend':'dolfinx_over_backend_total'}.get(field)
-        fig,axes=plt.subplots(1,2,figsize=(12,5.2 if total_field else 4.8))
-        for ax,n in zip(axes,(46,99)):
+        fig,grid=plt.subplots(1,len(sizes),squeeze=False,figsize=(max(8,6*len(sizes)),5.2 if total_field else 4.8))
+        axes=grid[0]
+        for ax,n in zip(axes,sizes):
             for index,backend in enumerate(BACKENDS):
                 rr=[r for r in rows if r['subdivisions']==n and r['backend']==backend and field in r]
                 label = backend + (' · main' if total_field else '')
@@ -164,7 +173,9 @@ def plot(out,rows):
                     tt=[r for r in rr if total_field in r]
                     ax.plot([r['ranks'] for r in tt],[r[total_field] for r in tt],
                             's--',color=f'C{index}',label=backend+' · main + compilation')
-            ax.set(title=f'{(n+1)**3:,} DoFs',xlabel='MPI ranks (CPU cores; also GPUs for JAX)',ylabel=ylabel,xticks=[1,2,3,4])
+            ax.set(title=f'{(n+1)**3:,} DoFs',xlabel=f'MPI ranks (JAX: {jax_cpus} CPU cores + 1 GPU/rank)',ylabel=ylabel,xticks=ranks)
+            if field == 'speedup':
+                ax.plot(ranks,[p/baseline_ranks for p in ranks],'k:',label='ideal')
             if log: ax.set_yscale('log')
             ax.grid(alpha=.2)
             if not total_field: ax.legend(fontsize=8)
@@ -176,13 +187,13 @@ def plot(out,rows):
         fig.tight_layout(rect=(0,.18 if total_field else 0,1,1))
         for ext in ('png','pdf'):fig.savefig(out/f'{name}.{ext}',dpi=180)
         plt.close(fig)
-    fig,axes=plt.subplots(2,2,figsize=(10,7))
-    for i,n in enumerate((46,99)):
+    fig,axes=plt.subplots(len(sizes),2,squeeze=False,figsize=(10,3.5*len(sizes)))
+    for i,n in enumerate(sizes):
         for j,backend in enumerate(('mpi4jax','sharding')):
             ax=axes[i,j];rr=[r for r in rows if r['subdivisions']==n and r['backend']==backend]
             for phase in ('lowering','compilation','first_execution'):
                 ax.plot([r['ranks'] for r in rr],[r[phase+'_ms'] for r in rr],'o-',label=phase)
-            ax.set(title=f'{backend} · {(n+1)**3:,} DoFs',xlabel='GPUs / ranks',ylabel='ms',yscale='log',xticks=[1,2,3,4]);ax.legend();ax.grid(alpha=.2)
+            ax.set(title=f'{backend} · {(n+1)**3:,} DoFs',xlabel='GPUs / ranks',ylabel='ms',yscale='log',xticks=ranks);ax.legend();ax.grid(alpha=.2)
     fig.tight_layout()
     for ext in ('png','pdf'):fig.savefig(out/f'startup.{ext}',dpi=180)
     plt.close(fig)

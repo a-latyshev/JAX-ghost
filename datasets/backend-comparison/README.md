@@ -4,7 +4,7 @@ This folder runs fresh native DOLFINx CPU, mpi4jax GPU, and native JAX sharding
 measurements on the same concrete 3D Poisson fixtures. It does not consume old
 benchmark timings. Public `jaxghost` implementations are unchanged.
 
-[Completed comparison from allocation 5878288](RESULTS.md) · [Validation record](VALIDATION.md)
+[Original one-core comparison](RESULTS.md) · [One versus seven CPU cores per GPU rank](results/20260909T091109Z/CPU-COMPARISON.md) · [Validation record](VALIDATION.md)
 
 From the repository root, on IRIS with an active four-GPU allocation:
 
@@ -124,3 +124,45 @@ are added before taking the median across launches. These derived totals exclude
 first-execution startup and other setup; they are not measured cold-run wall times.
 CSV columns `total_ms_per_batch`, `total_amortized_us_per_matvec`, trial total
 ranges and the ratios ending in `_total` expose the same values.
+
+## Seven host CPU cores per GPU rank
+
+To test only the JAX backends against the unchanged native DOLFINx baseline:
+
+```bash
+BENCH_JOB_ID=5878288 bash datasets/backend-comparison/run.sh \
+  --jax-only-from /absolute/path/to/results/20260909T075352Z \
+  --jax-cpus-per-rank 7
+```
+
+This reuses the exact per-trial fixtures and copies the original DOLFINx records
+with explicit provenance. It does not launch DOLFINx. Each JAX mask contains its
+original CPU core and six additional physical cores on that socket; rank masks
+are disjoint. The GPU UUID assignment and node must match the baseline. Numerical
+library thread limits remain one; the extra cores are available to JAX compilation
+and runtime helper threads. The Python loop, workload and MPI timing stay the same.
+The previous regression result is reused; JAX smoke validation is run again.
+
+The seven-core campaign has its own output folder. After its summary is generated,
+create the direct one-versus-seven-core CSV, report and figure using the mpc-v10
+venv:
+
+```bash
+python datasets/backend-comparison/compare_cpu.py /absolute/path/to/new/run
+```
+
+The one-core measurements and their original plots are preserved. The new
+comparison includes warmed matvec time and compilation plus one 100-call batch.
+
+## Larger P1 mesh and selected ranks
+
+```bash
+BENCH_JOB_ID=5880565 bash datasets/backend-comparison/run.sh \
+  --sizes 159 --ranks 2 3 4 --jax-cpus-per-rank 1
+```
+
+This runs fresh P1 fixtures with 4,096,000 DoFs. Size and rank lists default to
+`46 99` and `1 2 3 4`; smoke checks follow the selected ranks. Strong scaling uses
+the smallest selected rank count: for this campaign, speedup is T2/Tp and
+parallel efficiency is 2*T2/(p*Tp). The ideal curve is p/2. A missing baseline
+leaves scaling unavailable. GPU and host memory inventories accompany results.

@@ -1,10 +1,13 @@
 """Pin before importing numerical libraries, identically for both MPI stacks."""
 import os
+import json
 import sys
 
 rank = int(os.environ['OMPI_COMM_WORLD_LOCAL_RANK'])
 cpus = os.environ['BENCH_CPU_IDS'].split(',')
-os.sched_setaffinity(0, {int(cpus[rank])})
+mask = ([int(cpus[rank])] if sys.argv[1] == 'dolfinx' or 'BENCH_CPU_SETS' not in os.environ
+        else json.loads(os.environ['BENCH_CPU_SETS'])[rank])
+os.sched_setaffinity(0, set(mask))
 if sys.argv[1] == 'dolfinx':
     os.environ['CUDA_VISIBLE_DEVICES'] = ''
 else:

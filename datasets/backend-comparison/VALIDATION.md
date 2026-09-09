@@ -63,3 +63,23 @@ startup remains excluded. Seven pytest tests passed, including trial pairing,
 unit conversion and zero compilation cost for DOLFINx. The updated batch and
 ratio figures were visually inspected. Runtime worker hashes still match the
 original manifest; `postprocessing.json` records the updated summarizer hashes.
+
+## Seven-core JAX-only campaign
+
+`results/20260909T091109Z` ran both JAX backends on iris-169 in allocation
+5878288 with seven distinct physical CPU cores and one V100 per rank. All eight
+JAX smoke launches and 45 full JAX launches passed. The three n99/four-rank
+mpi4jax trials reproduced the existing XLA fusion assertion. No DOLFINx process
+was launched: all 28 reused native records (including smoke references) are
+byte-identical to the original campaign. The same per-trial fixture fingerprints,
+node, GPU UUIDs and timing settings were verified. Each seven-core mask includes
+its original one-core anchor and shares no physical cores with another rank.
+
+Eight pytest audit tests passed, including seven-core placement validation with
+a one-core DOLFINx baseline and rejection of an incorrect JAX CPU assignment.
+The existing repository regression result was reused because this campaign only
+changes JAX CPU placement and replays the unchanged benchmark/library operations.
+Worker and launcher hashes were unchanged during sampling. Comparison artifacts
+include warmed computation, compilation-plus-batch totals, and detailed phase
+columns; the combined figure was visually inspected. See
+[the CPU allocation comparison](results/20260909T091109Z/CPU-COMPARISON.md).
