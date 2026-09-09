@@ -92,3 +92,14 @@ with 1, 2, and 4 ranks using `--gpus-per-node=4 --gpu-bind=none` instead of
 SVG generation also completed. Evidence: `results/sbatch-5880983/`. These are
 smoke timings, not production scaling measurements. Multi-node and partner-HPC
 execution remain unverified.
+
+## GPU selection before MPI initialization
+
+The partner's screenshot reported four CUDA devices after the worker attempted to
+mask to one. GPU selection now runs before importing MPI, with subsequent MPI
+verification of the launcher's local rank. Eight selection/error scenarios passed
+using a standard-library assertion harness. The login Python lacked pytest, so
+the new pytest file was not run there. IRIS job 5883793 (iris-178) passed n4
+correctness, timing and plot generation on 1/2/4 GPUs after this change. Full MPI
+regressions were not repeated for this entrypoint change. Partner-HPC and
+multi-node validation of this change remain pending.

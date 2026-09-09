@@ -5,6 +5,9 @@ backend in `src/jaxghost`; no alternative numerical implementation is bundled.
 
 ## Requirements
 
+For the IDRIS system, see [Jean Zay environment setup](SETUP-JEAN-ZAY.md).
+The IRIS Spack setup is not portable to IDRIS.
+
 - Linux, NVIDIA GPUs, GPU-enabled JAX (tested: **0.11.1**), NumPy, mpi4py,
   and an MPI installation compatible with mpi4py. MPI is mandatory.
 - No DOLFINx, mpi4jax, pytest, matplotlib or CUDA-aware MPI is needed for replay.

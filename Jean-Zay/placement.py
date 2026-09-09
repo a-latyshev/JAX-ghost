@@ -32,7 +32,9 @@ def cuda_identity():
     count = ctypes.c_int()
     call('cuDeviceGetCount', ctypes.byref(count))
     if count.value != 1:
-        raise ValueError(f'Expected exactly one visible CUDA GPU, found {count.value}')
+        raise ValueError(f'Expected exactly one visible CUDA GPU, found {count.value}; '
+                         f'CUDA_VISIBLE_DEVICES={os.environ.get("CUDA_VISIBLE_DEVICES")!r}. '
+                         'CUDA may have initialized before GPU selection.')
     device = ctypes.c_int()
     call('cuDeviceGet', ctypes.byref(device), 0)
     uuid = (ctypes.c_ubyte*16)()
@@ -59,12 +61,16 @@ def validate_records(records):
                 raise ValueError('Overlapping CPU affinity: bind each rank to disjoint CPUs')
 
 
-def prepare(comm):
+def prepare(comm, expected_local_rank=None):
     local = comm.Split_type(MPI.COMM_TYPE_SHARED, key=comm.rank)
     local_rank = local.rank
     node_group = local.bcast(comm.rank if local_rank == 0 else None, root=0)
     local.Free()
-    collective(comm, lambda: select_visible_gpu(local_rank))
+    def select():
+        if expected_local_rank is not None and expected_local_rank != local_rank:
+            raise ValueError("Launcher local rank disagrees with MPI shared-memory rank")
+        select_visible_gpu(local_rank)
+    collective(comm, select)
     def inspect():
         record = dict(rank=comm.rank, node_local_rank=local_rank, node_group=node_group,
                       hostname=platform.node(), cpu_affinity=sorted(os.sched_getaffinity(0)),

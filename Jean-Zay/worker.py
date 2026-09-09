@@ -4,6 +4,8 @@ from pathlib import Path
 import sys
 import traceback
 import os
+from gpu_bootstrap import bootstrap
+_BOOTSTRAP_RANK, _BOOTSTRAP_ERROR = bootstrap()
 import numpy as np
 print("[Jean-Zay] Python started; importing MPI", file=sys.stderr, flush=True)
 from mpi4py import MPI
@@ -33,10 +35,14 @@ def main(check_only=False):
         raise ValueError('Invalid counts')
     if not check_only and a.output is None:
         raise ValueError('Timing requires --output FILE')
+    def check_bootstrap():
+        if _BOOTSTRAP_ERROR:
+            raise ValueError(_BOOTSTRAP_ERROR)
+    collective(comm, check_bootstrap)
     folder = a.data/f'n{a.subdivisions}/{comm.size}ranks'
     meta, data, adapter = load_fixture(folder, comm)
     progress("Fixture loaded; checking GPU and CPU placement")
-    placements = prepare(comm)  # Mask and query CUDA before JAX initializes a backend.
+    placements = prepare(comm, expected_local_rank=_BOOTSTRAP_RANK)  # Mask and query CUDA before JAX initializes a backend.
     os.environ['JAX_PLATFORMS'] = 'cuda'
     os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
     import jax
@@ -122,7 +128,7 @@ def main(check_only=False):
                 raise ValueError('Unexpected array placement')
         if any(k.split('.')[0] in ('dolfinx','mpi4jax') for k in sys.modules):
             raise RuntimeError('Sharded replay imported an optional backend')
-        source_files = sorted((ROOT/'src/jaxghost').glob('*.py')) + [HERE/name for name in ('worker.py','common.py','placement.py')]
+        source_files = sorted((ROOT/'src/jaxghost').glob('*.py')) + [HERE/name for name in ('worker.py','common.py','placement.py','gpu_bootstrap.py')]
         source_hashes = {str(f.relative_to(ROOT)):sha256(f) for f in source_files}
         record = dict(mode='check' if check_only else 'time',correctness_passed=True,
             subdivisions=a.subdivisions,global_dofs=meta['global_dofs'],ranks=comm.size,trial=a.trial,
