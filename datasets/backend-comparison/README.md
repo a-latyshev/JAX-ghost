@@ -4,6 +4,8 @@ This folder runs fresh native DOLFINx CPU, mpi4jax GPU, and native JAX sharding
 measurements on the same concrete 3D Poisson fixtures. It does not consume old
 benchmark timings. Public `jaxghost` implementations are unchanged.
 
+[Completed comparison from allocation 5878288](RESULTS.md) · [Validation record](VALIDATION.md)
+
 From the repository root, on IRIS with an active four-GPU allocation:
 
 ```bash

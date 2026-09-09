@@ -1,6 +1,6 @@
 # Validation record — 2026-09-09
 
-The benchmark is being exercised in allocation 5878288 on iris-169. Production
+The benchmark was executed in allocation 5878288 on iris-169. Production
 source code is unchanged outside this benchmark folder.
 
 ## Checks completed
@@ -34,3 +34,22 @@ The main campaign is `results/20260909T075352Z`. Its manifest records the exact
 worker/launcher source hashes at launch, physical CPU/GPU assignments, and source
 revision. The audit test was converted to pytest during earlier diagnostics;
 production worker source is frozen for this campaign.
+
+## Final campaign outcome
+
+`results/20260909T075352Z` completed all 72 planned full launches, plus all 12
+small validation launches. All 12 small cases and 69 full cases passed. All three
+n99/four-rank mpi4jax attempts aborted in XLA GPU fusion cost analysis with
+`shape_util.cc:757: shape.IsArray() || shape.IsTuple()`. This is the same
+failure recorded in `../benchmark/JAX-analysis/README.md`, not a successful
+measurement. The campaign returned status 1 because it retains these failures
+and the known regression failure; all available reports were generated.
+
+The final audit checked all 28 size/rank/trial fixture groups, recomputed every
+successful timing median, verified CPU/GPU assignment and matching JAX versions,
+and confirmed unchanged worker/launcher source hashes. All eight JAX smoke logs
+show exactly one matvec compilation per rank; see `compilation-audit.json`.
+The maximum full-run global L2 error was 5.373506661414258e-13.
+
+CSV, Markdown, and five PNG/PDF figure pairs were generated. Runtime and startup
+figures were visually inspected. Results are summarized in [RESULTS.md](RESULTS.md).
